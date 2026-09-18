@@ -1,8 +1,6 @@
 name: Two Takes EFootball
 
 on:
-  push:
-    branches: ["main"]
   workflow_dispatch:
     inputs:
       slot:
@@ -34,8 +32,8 @@ concurrency:
 
 jobs:
   post:
-    if: github.event_name != 'push' || contains(github.event.head_commit.message, '[RUN_NOW]')
     runs-on: ubuntu-latest
+    timeout-minutes: 10
 
     steps:
       - name: Checkout
@@ -75,15 +73,14 @@ jobs:
           python-version: "3.12"
 
       - name: Install dependencies
-        run: pip install -r requirements.txt
+        run: python -m pip install -r requirements.txt
 
       - name: Publish post
         env:
           FACEBOOK_PAGE_ACCESS_TOKEN: ${{ secrets.FACEBOOK_PAGE_ACCESS_TOKEN }}
           FACEBOOK_PAGE_ID: ${{ secrets.FACEBOOK_PAGE_ID }}
           OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
-          OPENROUTER_MODEL: openai/gpt-oss-20b:free
-          PEXELS_API_KEY: ${{ secrets.PEXELS_API_KEY }}
+          OPENROUTER_MODEL: ${{ vars.OPENROUTER_MODEL || 'openai/gpt-oss-20b:free' }}
           POST_SLOT: ${{ steps.slot.outputs.slot }}
         run: python main.py
 
