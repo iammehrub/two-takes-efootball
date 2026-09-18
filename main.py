@@ -13,6 +13,8 @@ from urllib.parse import quote_plus
 import requests
 from PIL import Image, ImageDraw, ImageFont
 
+from discord_notify import notify_error, notify_facebook_post
+
 ROOT = Path(__file__).resolve().parent
 STATE_PATH = ROOT / "data" / "state.json"
 WORK_PATH = ROOT / "work"
@@ -1078,6 +1080,10 @@ def main() -> None:
     state["posted"] = state["posted"][-100:]
     save_state(state)
 
+    # Discord notification is deliberately non-blocking: a Discord outage
+    # must not turn a successful Facebook publication into a failed post run.
+    notify_facebook_post(entry)
+
     print(
         json.dumps(
             entry,
@@ -1092,4 +1098,5 @@ if __name__ == "__main__":
         main()
     except Exception as exc:
         print(f"ERROR: {exc}", file=sys.stderr)
+        notify_error(str(exc), component="Facebook posting")
         raise
