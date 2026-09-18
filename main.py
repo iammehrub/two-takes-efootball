@@ -208,13 +208,47 @@ def search_pexels(query: str) -> tuple[bytes, str]:
     return b"", ""
 
 
-def publish_photo(caption: str, image_bytes: bytes) -> dict:
+def resolve_page_access_token(token: str) -> str:
+    """Accept either a User Access Token or a Page Access Token.
+
+    When a User Access Token is supplied, ask Meta for the Page Access Token
+    belonging to FACEBOOK_PAGE_ID. The returned Page token is then used for
+    publishing.
+    """
+    response = requests.get(
+        "https://graph.facebook.com/me/accounts",
+        params={
+            "fields": "id,name,access_token,tasks",
+            "access_token": token,
+        },
+        headers={"User-Agent": UA},
+        timeout=30,
+    )
+
+    if response.ok:
+        data = response.json()
+        for page in data.get("data", []):
+            if str(page.get("id")) == str(FACEBOOK_PAGE_ID):
+                page_token = (page.get("access_token") or "").strip()
+                tasks = page.get("tasks") or []
+                if page_token:
+                    print(
+                        f"Resolved Page access token for {page.get('name', FACEBOOK_PAGE_ID)}. "
+                        f"Tasks: {', '.join(tasks) if tasks else 'not returned'}"
+                    )
+                    return page_token
+
+    # If the supplied token is already a Page token, keep it.
+    return token
+
+
+def publish_photo(caption: str, image_bytes: bytes, access_token: str) -> dict:
     response = requests.post(
         f"https://graph.facebook.com/{FACEBOOK_PAGE_ID}/photos",
         data={
             "message": caption,
             "published": "true",
-            "access_token": FACEBOOK_PAGE_ACCESS_TOKEN,
+            "access_token": access_token,
         },
         files={
             "source": (
@@ -243,7 +277,7 @@ def publish_text(caption: str) -> dict:
         f"https://graph.facebook.com/{FACEBOOK_PAGE_ID}/feed",
         data={
             "message": caption,
-            "access_token": FACEBOOK_PAGE_ACCESS_TOKEN,
+            "access_token": access_token,
         },
         timeout=60,
     )
@@ -284,14 +318,15 @@ def main() -> None:
     stories = fetch_google_news(config["query"])
     story = choose_story(stories, state)
     caption = call_gemini(story, config["name"])
+    page_access_token = resolve_page_access_token(FACEBOOK_PAGE_ACCESS_TOKEN)
 
     image_bytes, image_url = search_pexels(config["pexels"])
 
     if image_bytes:
-        result = publish_photo(caption, image_bytes)
+        result = publish_photo(caption, image_bytes, page_access_token)
         post_type = "photo"
     else:
-        result = publish_text(caption)
+        result = publish_text(caption, page_access_token)
         post_type = "text"
 
     entry = {
