@@ -30,7 +30,7 @@ FACEBOOK_PAGE_ACCESS_TOKEN = os.environ.get(
 OPENROUTER_API_KEY = os.environ.get("OPENROUTER_API_KEY", "").strip()
 OPENROUTER_MODEL = os.environ.get(
     "OPENROUTER_MODEL",
-    "openai/gpt-oss-20b:free",
+    "openai/gpt-oss-20b",
 ).strip()
 
 try:
