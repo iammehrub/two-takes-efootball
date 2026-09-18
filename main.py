@@ -5,7 +5,8 @@ import re
 import sys
 import xml.etree.ElementTree as ET
 from html import unescape
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
+from email.utils import parsedate_to_datetime
 from pathlib import Path
 from urllib.parse import quote_plus
 
@@ -30,12 +31,27 @@ except ValueError:
     SLOT = 0
 
 SLOT_CONFIG = {
-    1: {"name": "eFootball News", "query": "eFootball latest news Konami", "pexels": "football video game"},
-    2: {"name": "Updates & Events", "query": "eFootball update event campaign Konami", "pexels": "football stadium"},
-    3: {"name": "Player Ratings", "query": "eFootball player ratings featured players", "pexels": "football player"},
-    4: {"name": "Tips & Community", "query": "eFootball tips formation tactics players", "pexels": "football tactics"},
+    1: {
+        "name": "eFootball News",
+        "query": '"eFootball" "KONAMI" latest news when:7d',
+        "pexels": "eFootball gaming",
+    },
+    2: {
+        "name": "Updates & Events",
+        "query": '"eFootball" update event campaign KONAMI when:7d',
+        "pexels": "football video game gaming",
+    },
+    3: {
+        "name": "Player Ratings",
+        "query": '"eFootball" "Live Update" ratings players when:7d',
+        "pexels": "football video game player",
+    },
+    4: {
+        "name": "Tips & Community",
+        "query": '"eFootball" tips tactics Dream Team when:7d',
+        "pexels": "football video game tactics",
+    },
 }
-
 UA = "TwoTakesEFootballBot/1.0 (+GitHub Actions)"
 
 
@@ -67,16 +83,29 @@ def strip_html(text: str) -> str:
     return re.sub(r"\s+", " ", text).strip()
 
 
-def fetch_google_news(query: str, limit: int = 12) -> list[dict]:
+def parse_news_datetime(value: str) -> datetime | None:
+    if not value:
+        return None
+    try:
+        dt = parsedate_to_datetime(value)
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=timezone.utc)
+        return dt.astimezone(timezone.utc)
+    except (TypeError, ValueError, OverflowError):
+        return None
+
+
+def fetch_google_news(query: str, limit: int = 20) -> list[dict]:
     url = (
         "https://news.google.com/rss/search?"
         f"q={quote_plus(query)}&hl=en-US&gl=US&ceid=US:en"
     )
-    response = requests.get(url, headers={"User-Agent": UA}, timeout=20)
+    response = requests.get(url, headers={"User-Agent": UA}, timeout=(10, 20))
     response.raise_for_status()
 
     root = ET.fromstring(response.content)
     items = []
+    cutoff = datetime.now(timezone.utc) - timedelta(days=7)
 
     for item in root.findall("./channel/item")[:limit]:
         title = (item.findtext("title") or "").strip()
@@ -91,6 +120,12 @@ def fetch_google_news(query: str, limit: int = 12) -> list[dict]:
             else ""
         )
 
+        published_dt = parse_news_datetime(pub_date)
+
+        # Hard freshness gate. We do not post old stories just to fill a slot.
+        if published_dt is None or published_dt < cutoff:
+            continue
+
         if title and link:
             items.append(
                 {
@@ -98,11 +133,18 @@ def fetch_google_news(query: str, limit: int = 12) -> list[dict]:
                     "link": link,
                     "description": description,
                     "pub_date": pub_date,
+                    "published_dt": published_dt,
                     "source": source,
                 }
             )
 
+    # Newest first.
+    items.sort(
+        key=lambda item: item.get("published_dt") or datetime.min.replace(tzinfo=timezone.utc),
+        reverse=True,
+    )
     return items
+
 
 
 def is_efootball_story(story: dict) -> bool:
@@ -143,30 +185,19 @@ def choose_story(items: list[dict], state: dict) -> dict:
     ]
 
     if relevant:
-        return relevant[0]
-
-    # Do not publish generic football content just to fill the schedule.
-    relevant_old = [
-        item for item in items
-        if is_efootball_story(item)
-    ]
-
-    if relevant_old:
-        return relevant_old[0]
+        # Prefer official KONAMI sources when freshness is comparable.
+        official = [
+            item for item in relevant
+            if "KONAMI" in item.get("source", "").upper()
+            or "KONAMI" in item.get("title", "").upper()
+        ]
+        return (official or relevant)[0]
 
     fail(
-        "No eFootball-specific story was found. "
-        "The bot will not publish generic football content."
+        "No fresh eFootball-specific story was found in the last 7 days. "
+        "The bot will not publish stale or generic football content."
     )
 
-def choose_story(items: list[dict], state: dict) -> dict:
-    posted_links = {x.get("link") for x in state.get("posted", [])}
-    fresh = [x for x in items if x["link"] not in posted_links]
-    if fresh:
-        return fresh[0]
-    if not items:
-        fail("No news items were returned.")
-    return items[0]
 
 
 def call_ai(story: dict, slot_name: str) -> str:
@@ -189,7 +220,7 @@ Requirements:
 - Add 2-4 relevant emojis.
 - End with ONE simple engagement question.
 - Add 4-7 relevant hashtags.
-- The output MUST use exactly this structure:\nTITLE: <short headline>\n\n<caption body>\n\nTAGS: <hashtags>\n- The title, body, and tags must all be specifically about eFootball.
+- The output MUST use exactly this structure:\nTITLE: <short headline>\n\n<caption body>\n\nTAGS: <hashtags>\n- The title, body, and tags must all be specifically about eFootball.\n- The title must mention "eFootball" or a clearly eFootball-specific feature/player/event.\n- Never write a generic football-news headline.\n- Do not use generic hooks that could describe FIFA/EA FC/real football instead of eFootball.
 - Do not claim rumors are confirmed.
 - Do not mention that you are an AI.
 
@@ -591,6 +622,8 @@ def main() -> None:
     stories = fetch_google_news(config["query"] + " eFootball")
     story = choose_story(stories, state)
     caption = call_ai(story, config["name"])
+    if "efootball" not in caption.lower():
+        fail("Generated caption is not explicitly eFootball-specific.")
     page_access_token = resolve_page_access_token(FACEBOOK_PAGE_ACCESS_TOKEN)
     verify_page_publishing_access(page_access_token)
 
@@ -614,6 +647,7 @@ def main() -> None:
         "link": story["link"],
         "facebook_id": result.get("post_id") or result.get("id"),
         "image_url": image_url,
+        "caption": caption,
     }
 
     state.setdefault("posted", []).append(entry)
