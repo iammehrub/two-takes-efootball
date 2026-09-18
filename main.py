@@ -34,7 +34,7 @@ except ValueError:
 SLOT_CONFIG = {
     1: {
         "name": "eFootball News",
-        "query": '"eFootball" "KONAMI" latest news when:7d',
+        "query": '"eFootball" "KONAMI" latest news when:3d',
         "pexels": "eFootball gaming",
     },
     2: {
@@ -106,7 +106,7 @@ def fetch_google_news(query: str, limit: int = 20) -> list[dict]:
 
     root = ET.fromstring(response.content)
     items = []
-    cutoff = datetime.now(timezone.utc) - timedelta(days=7)
+    cutoff = datetime.now(timezone.utc) - timedelta(days=3)
 
     for item in root.findall("./channel/item")[:limit]:
         title = (item.findtext("title") or "").strip()
@@ -215,46 +215,42 @@ def _clean_ai_text(value) -> str:
 
 def parse_generated_post(raw: str, story: dict, slot_name: str) -> dict:
     raw = _clean_ai_text(raw)
-    if not raw or raw.lower() in {"none", "null"}:
-        return {}
 
-    title_match = re.search(r"(?im)^TITLE:\s*(.+?)\s*$", raw)
-    tags_match = re.search(r"(?im)^TAGS:\s*(.+?)\s*$", raw)
+    title = ""
+    tags = ""
+    body = ""
 
-    title = title_match.group(1).strip() if title_match else ""
-    tags = tags_match.group(1).strip() if tags_match else ""
+    if raw and raw.lower() not in {"none", "null"}:
+        title_match = re.search(r"(?im)^TITLE:\s*(.+?)\s*$", raw)
+        tags_match = re.search(r"(?im)^TAGS:\s*(.+?)\s*$", raw)
 
-    body_start = title_match.end() if title_match else 0
-    body_end = tags_match.start() if tags_match else len(raw)
-    body = raw[body_start:body_end].strip()
+        if title_match:
+            title = title_match.group(1).strip()
 
-    # Remove accidental labels/repeated headings.
-    body = re.sub(r"(?im)^TITLE:\s*.*$", "", body).strip()
-    body = re.sub(r"(?im)^TAGS:\s*.*$", "", body).strip()
+        body_start = title_match.end() if title_match else 0
+        body_end = tags_match.start() if tags_match else len(raw)
+        body = raw[body_start:body_end].strip()
 
+        if tags_match:
+            tags = tags_match.group(1).strip()
+
+    # Deterministic fallback: use verified source facts rather than inventing.
     if not title:
         title = story["title"].split(" - ")[0].strip()
 
     if "efootball" not in title.lower():
         title = "eFootball: " + title
 
+    body = re.sub(r"(?im)^TITLE:\s*.*$", "", body).strip()
+    body = re.sub(r"(?im)^TAGS:\s*.*$", "", body).strip()
+
     if not body:
         summary = story.get("description", "").strip()
-        if summary:
-            body = summary[:700].rstrip()
-        else:
-            body = (
-                "KONAMI has shared a new eFootball update. "
-                "Check the official details before jumping into the game."
-            )
-
-    if not tags:
-        tags = (
-            "#eFootball #eFootball2026 #KONAMI "
-            "#eFootballNews #DreamTeam"
+        body = summary[:650].rstrip() if summary else (
+            "A new eFootball update has been reported. "
+            "Check the official details before making any changes to your team."
         )
 
-    # Keep only hashtag tokens and cap the number.
     hashtag_tokens = re.findall(r"#[A-Za-z0-9_]+", tags)
     if not hashtag_tokens:
         hashtag_tokens = [
@@ -264,6 +260,7 @@ def parse_generated_post(raw: str, story: dict, slot_name: str) -> dict:
             "#eFootballNews",
             "#DreamTeam",
         ]
+
     tags = " ".join(dict.fromkeys(hashtag_tokens[:7]))
 
     return {
@@ -272,6 +269,7 @@ def parse_generated_post(raw: str, story: dict, slot_name: str) -> dict:
         "tags": tags,
         "caption": f"{title}\n\n{body}\n\n{tags}",
     }
+
 
 
 def call_ai(story: dict, slot_name: str) -> dict:
@@ -316,7 +314,8 @@ URL: {story["link"]}
         "model": OPENROUTER_MODEL,
         "messages": [{"role": "user", "content": prompt}],
         "temperature": 0.35,
-        "max_tokens": 220,
+        "max_tokens": 320,
+        "reasoning": {"exclude": True},
     }
 
     import time
@@ -362,18 +361,18 @@ URL: {story["link"]}
                 content = _clean_ai_text(choices[0].get("text"))
 
             parsed = parse_generated_post(content, story, slot_name)
-            if parsed:
+            if content:
                 print(
                     f"Caption generated with OpenRouter model "
                     f"{OPENROUTER_MODEL}."
                 )
                 return parsed
 
-            last_error = (
-                f"OpenRouter returned empty/invalid content: "
-                f"{str(data)[:700]}"
+            print(
+                "OpenRouter returned no final text; using deterministic "
+                "source-based eFootball caption."
             )
-            break
+            return parsed
 
         last_error = f"HTTP {response.status_code}: {response.text[:700]}"
 
@@ -631,6 +630,8 @@ def main() -> None:
     stories = fetch_google_news(config["query"] + " eFootball")
     story = choose_story(stories, state)
     caption_data = call_ai(story, config["name"])
+    if caption_data["caption"].strip().lower() == "none":
+        fail("Generated caption evaluated to None.")
     if "efootball" not in caption_data["caption"].lower():
         fail("Generated caption is not explicitly eFootball-specific.")
     page_access_token = resolve_page_access_token(FACEBOOK_PAGE_ACCESS_TOKEN)
