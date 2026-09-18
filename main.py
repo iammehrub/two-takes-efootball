@@ -26,7 +26,10 @@ FACEBOOK_PAGE_ACCESS_TOKEN = os.environ.get(
 ).strip()
 
 OPENROUTER_API_KEY = os.environ.get("OPENROUTER_API_KEY", "").strip()
-OPENROUTER_MODEL = "qwen/qwen3-235b-a22b-2507:free"
+OPENROUTER_MODEL = os.environ.get(
+    "OPENROUTER_MODEL",
+    "openai/gpt-oss-20b:free",
+).strip()
 
 try:
     SLOT = int(os.environ.get("POST_SLOT", "1"))
@@ -40,29 +43,37 @@ SLOT_CONFIG = {
         "name": "eFootball News",
         "queries": [
             'site:konami.com/efootball/en/topic/news eFootball when:3d',
-            '"eFootball" "KONAMI" when:3d',
+            '"eFootball" KONAMI news when:3d',
         ],
+        "required": ("efootball",),
+        "exclude": ("ratings", "live update", "potw", "player of the week", "tactics", "formation", "guide", "tips"),
     },
     2: {
         "name": "Updates & Events",
         "queries": [
-            'site:konami.com/efootball/en/topic/news eFootball update event when:3d',
-            '"eFootball" update event campaign KONAMI when:3d',
+            'site:konami.com/efootball/en/topic/news eFootball update event campaign when:3d',
+            '"eFootball" update event campaign maintenance when:3d',
         ],
+        "required": ("update", "event", "campaign", "maintenance", "version", "season", "announcement"),
+        "exclude": ("tactics", "formation", "guide", "tips"),
     },
     3: {
         "name": "Player Ratings",
         "queries": [
-            'site:konami.com/efootball/en/topic/news eFootball ratings players when:3d',
-            '"eFootball" "Live Update" ratings players when:3d',
+            'site:konami.com/efootball/en/topic/news eFootball ratings Live Update players when:3d',
+            '"eFootball" POTW Epic Big Time Show Time ratings player when:3d',
         ],
+        "required": ("rating", "live update", "potw", "player of the week", "epic", "big time", "show time", "booster", "player card"),
+        "exclude": ("tactics", "formation", "guide"),
     },
     4: {
         "name": "Tips & Community",
         "queries": [
-            '"eFootball" "Dream Team" tactics players when:3d',
-            '"eFootball" tips formations community when:3d',
+            '"eFootball" tactics formation guide tips Dream Team when:3d',
+            '"eFootball" gameplay skills build community when:3d',
         ],
+        "required": ("tactic", "formation", "guide", "tips", "gameplay", "skills", "build", "dream team"),
+        "exclude": ("transfer", "real madrid", "premier league"),
     },
 }
 
@@ -181,83 +192,73 @@ def fetch_google_news(query: str, limit: int = 20) -> list[dict]:
     return items
 
 
-def is_efootball_story(story: dict) -> bool:
-    text = " ".join(
-        [
-            story.get("title", ""),
-            story.get("description", ""),
-            story.get("source", ""),
-        ]
+def story_text(story: dict) -> str:
+    return " ".join(
+        [story.get("title", ""), story.get("description", "")]
     ).lower()
 
-    signals = (
-        "efootball",
-        "e-football",
-        "e football",
-        "konami",
-        "dream team",
-        "efootball league",
-        "efootball points",
-        "efootball coins",
-        "booster player",
-        "epic player",
-        "special player list",
-        "live update",
-        "pes",
+
+def is_efootball_story(story: dict, config: dict) -> bool:
+    text = story_text(story)
+    identity = (
+        "efootball" in text
+        or "e-football" in text
+        or "e football" in text
+        or "dream team" in text
+        or "live update" in text
+        or "potw" in text
+        or "epic player" in text
+        or "big time" in text
+        or "show time" in text
     )
+    if not identity:
+        return False
+    required = config.get("required", ())
+    excluded = config.get("exclude", ())
+    if required and not any(term in text for term in required):
+        return False
+    if any(term in text for term in excluded):
+        return False
+    return True
 
-    return any(signal in text for signal in signals)
 
-
-def choose_story(items: list[dict], state: dict) -> dict:
-    posted_links = {entry.get("link") for entry in state.get("posted", [])}
-
-    relevant = [
-        item
-        for item in items
-        if item.get("link") not in posted_links
-        and is_efootball_story(item)
-    ]
-
-    if not relevant:
-        fail(
-            "No fresh eFootball-specific story was found in the last 3 days. "
-            "The bot will not publish stale or generic football content."
-        )
-
-    def meaningful_title(item: dict) -> bool:
+def choose_story(items: list[dict], state: dict, config: dict) -> dict:
+    posted_links = {entry.get("link") for entry in state.get("posted", []) if entry.get("link")}
+    posted_titles = {
+        re.sub(r"\s+", " ", entry.get("title", "").strip().lower())
+        for entry in state.get("posted", [])
+        if entry.get("title")
+    }
+    candidates = []
+    for item in items:
+        normalized = re.sub(r"\s+", " ", item.get("title", "").strip().lower())
+        if item.get("link") in posted_links or normalized in posted_titles:
+            continue
+        if not is_efootball_story(item, config):
+            continue
         title = item.get("title", "").strip().lower()
-        return title not in {
-            "info detail",
-            "konami group corporation",
-            "info detail - konami group corporation",
-        } and len(title) > 12
-
-    official = [
-        item
-        for item in relevant
-        if (
-            "KONAMI" in item.get("source", "").upper()
-            or "KONAMI" in item.get("title", "").upper()
+        if title in {"info detail", "konami group corporation", "info detail - konami group corporation"} or len(title) <= 12:
+            continue
+        if not item.get("source", "").strip():
+            continue
+        source_lower = item.get("source", "").lower()
+        score = 0
+        if "konami" in source_lower:
+            score += 100
+        elif any(name in source_lower for name in ("gamingonphone", "efootballhub", "sportsdunia", "sportskeeda", "game8", "dexerto")):
+            score += 30
+        age_hours = max(0, (datetime.now(timezone.utc) - item["published_dt"]).total_seconds() / 3600)
+        score -= min(int(age_hours), 72)
+        candidates.append((score, item))
+    if not candidates:
+        fail(
+            f"No fresh story matched the '{config['name']}' slot in the last 3 days. "
+            "The bot will skip instead of publishing unrelated content."
         )
-        and meaningful_title(item)
-    ]
-
-    if official:
-        chosen = official[0]
-    else:
-        meaningful = [
-            item for item in relevant
-            if meaningful_title(item)
-        ]
-        chosen = (meaningful or relevant)[0]
-
-    print(
-        "Selected story: "
-        f"{chosen['title']} | {chosen['source']} | {chosen['pub_date']}"
-    )
+    candidates.sort(key=lambda pair: pair[0], reverse=True)
+    chosen = candidates[0][1]
+    print(f"Selected story: {chosen['title']} | {chosen['source']} | {chosen['pub_date']}")
     return chosen
-
 
 
 def _clean_ai_text(value) -> str:
@@ -975,39 +976,28 @@ def publish_photo(
     return result
 
 
-def cleanup_legacy_posts(page_access_token: str) -> None:
-    legacy_ids = [
-        "1397515220100650_122095343775487467",
-        "1397515220100650_122095346487487467",
-        "1397515220100650_122095351101487467",
-        "1397515220100650_122095351917487467",
-        "1397515220100650_122095353603487467",
-        "1397515220100650_122095355559487467",
-    ]
 
-    for post_id in legacy_ids:
-        try:
-            response = requests.delete(
-                f"https://graph.facebook.com/{post_id}",
-                params={
-                    "access_token": page_access_token,
-                },
-                timeout=(10, 30),
-            )
-
-            if response.ok:
-                print(f"Removed legacy Facebook post {post_id}.")
-            else:
-                print(
-                    f"Could not remove legacy Facebook post {post_id}: "
-                    f"HTTP {response.status_code}"
-                )
-
-        except requests.RequestException as exc:
-            print(
-                f"Legacy post cleanup failed for {post_id}: {exc}"
-            )
-
+def validate_generated_post(post: dict, story: dict, config: dict) -> None:
+    title = re.sub(r"\s+", " ", post.get("title", "").strip())
+    body = re.sub(r"\s+", " ", post.get("body", "").strip())
+    caption = post.get("caption", "").strip()
+    if not title or not body or not caption:
+        fail("Generated post is empty or incomplete.")
+    title_lower = title.lower()
+    if not ("efootball" in title_lower or any(term in title_lower for term in config.get("required", ()))):
+        fail("Generated title is not specific enough for the selected eFootball slot.")
+    if len(title) > 110:
+        fail("Generated title is too long.")
+    if len(body) < 25:
+        fail("Generated body is too short to be useful.")
+    if re.fullmatch(r"(?i)(none|null|n/a)", title):
+        fail("Generated title is invalid.")
+    source_text = story_text(story)
+    required = config.get("required", ())
+    if required and not any(term in source_text for term in required):
+        fail("Source does not contain the required topic for this slot; refusing to publish.")
+    if "efootball" not in caption.lower():
+        fail("Generated post is not explicitly eFootball-specific.")
 
 def main() -> None:
     if not FACEBOOK_PAGE_ID:
@@ -1048,16 +1038,9 @@ def main() -> None:
         reverse=True,
     )
 
-    story = choose_story(collected, state)
+    story = choose_story(collected, state, config)
     caption_data = call_ai(story, config["name"])
-
-    if "efootball" not in caption_data["caption"].lower():
-        fail(
-            "Generated post is not explicitly eFootball-specific."
-        )
-
-    if caption_data["caption"].strip().lower() == "none":
-        fail("Generated post evaluated to None.")
+    validate_generated_post(caption_data, story, config)
 
     page_access_token = resolve_page_access_token(
         FACEBOOK_PAGE_ACCESS_TOKEN
@@ -1075,8 +1058,6 @@ def main() -> None:
         image_bytes,
         page_access_token,
     )
-
-    cleanup_legacy_posts(page_access_token)
 
     entry = {
         "posted_at": datetime.now(timezone.utc).isoformat(),
