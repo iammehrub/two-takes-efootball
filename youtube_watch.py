@@ -63,6 +63,7 @@ def main() -> None:
     seen = set(str(x) for x in state.get("seen_video_ids", []))
     configured = False
     new_videos = []
+    first_run = not state.get("initialized", False)
 
     for _, channel_env, webhook_env, label in configs:
         channel_id = os.environ.get(channel_env, "").strip()
@@ -74,6 +75,13 @@ def main() -> None:
             feed = fetch_feed(channel_id)
         except Exception as exc:
             notify_error(str(exc), component=f"YouTube {label} watcher")
+            continue
+
+        # On the first run, seed the current feed without sending a
+        # notification for older uploads already present in the channel feed.
+        if first_run:
+            seen.update(video["video_id"] for video in feed)
+            print(f"Initialized {label} with {len(feed)} existing videos.")
             continue
 
         for video in reversed(feed):
@@ -106,6 +114,7 @@ def main() -> None:
         )
 
     state["seen_video_ids"] = list(seen)[-200:]
+    state["initialized"] = True
     state["checked_at"] = datetime.now(timezone.utc).isoformat()
     state["new_videos"] = new_videos
     save_state(state)
