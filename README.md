@@ -4,9 +4,11 @@ Automated Facebook Page posting for Two Takes EFootball.
 
 ## What it does
 
-- Publishes 4 posts per day.
-- Uses Google News RSS to find fresh eFootball-related stories.
-- Uses OpenRouter's free-model router to turn the source into an English/Banglish Facebook caption.
+- Publishes up to 4 posts per day.
+- Uses Google News RSS to find fresh eFootball stories.
+- Uses slot-specific topic filters so news, updates/events, player-card/rating content, and tips/community content do not get mixed together.
+- Prefers official KONAMI material and established eFootball coverage.
+- Uses OpenRouter for English/Banglish captions with a deterministic source-based fallback.
 - Generates a branded 1200×675 image locally with Pillow.
 - Publishes the image + caption to the Facebook Page through the Graph API.
 - Keeps posting history in `data/state.json` to reduce duplicate stories.
@@ -20,6 +22,10 @@ Create these repository secrets under Settings → Secrets and variables → Act
 - FACEBOOK_PAGE_ID
 - OPENROUTER_API_KEY
 
+Optional repository variable:
+
+- `OPENROUTER_MODEL` — defaults to `openai/gpt-oss-20b:free`
+
 ## Schedule
 
 The workflow uses Bangladesh time (Asia/Dhaka) and targets 10:15, 14:15, 18:15, and 22:15.
@@ -29,6 +35,8 @@ GitHub scheduled workflows can be delayed under load, so the exact posting minut
 ## Manual test
 
 Open Actions → Two Takes EFootball → Run workflow and select a post slot.
+
+Scheduled runs select the slot automatically from the scheduled time.
 
 ## Production safety
 
