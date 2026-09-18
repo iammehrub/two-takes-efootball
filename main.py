@@ -146,6 +146,19 @@ def fetch_google_news(query: str, limit: int = 20) -> list[dict]:
 
         published_dt = parse_news_datetime(pub_date)
 
+        if title.upper().startswith("INFO DETAIL"):
+            description_lower = description.lower()
+            known_titles = [
+                "Live Update Ratings Issue",
+                "Regarding Unavailable Players and Managers",
+                "Issue Affecting Some Player Models",
+                "Update Notice",
+            ]
+            for known_title in known_titles:
+                if known_title.lower() in description_lower:
+                    title = known_title
+                    break
+
         if not title or not link or published_dt is None:
             continue
 
@@ -214,20 +227,39 @@ def choose_story(items: list[dict], state: dict) -> dict:
             "The bot will not publish stale or generic football content."
         )
 
+    def meaningful_title(item: dict) -> bool:
+        title = item.get("title", "").strip().lower()
+        return title not in {
+            "info detail",
+            "konami group corporation",
+            "info detail - konami group corporation",
+        } and len(title) > 12
+
     official = [
         item
         for item in relevant
-        if "KONAMI" in item.get("source", "").upper()
-        or "KONAMI" in item.get("title", "").upper()
+        if (
+            "KONAMI" in item.get("source", "").upper()
+            or "KONAMI" in item.get("title", "").upper()
+        )
+        and meaningful_title(item)
     ]
 
-    chosen = (official or relevant)[0]
+    if official:
+        chosen = official[0]
+    else:
+        meaningful = [
+            item for item in relevant
+            if meaningful_title(item)
+        ]
+        chosen = (meaningful or relevant)[0]
 
     print(
         "Selected story: "
         f"{chosen['title']} | {chosen['source']} | {chosen['pub_date']}"
     )
     return chosen
+
 
 
 def _clean_ai_text(value) -> str:
@@ -249,6 +281,8 @@ def deterministic_post(story: dict) -> dict:
 
     if "efootball" not in title.lower():
         title = "eFootball: " + title
+    else:
+        title = title.replace("eFootball™", "eFootball")
 
     summary = story.get("description", "").strip()
 
@@ -307,7 +341,11 @@ def parse_generated_post(raw: str, story: dict) -> dict:
         body,
     ).strip()
 
-    if not title:
+    if not title or title.lower() in {
+        "info detail",
+        "konami group corporation",
+        "info detail - konami group corporation",
+    }:
         title = story["title"].split(" - ")[0].strip()
 
     if "efootball" not in title.lower():
@@ -493,6 +531,8 @@ URL:
 
 def resolve_page_access_token(token: str) -> str:
     """Resolve a Page Access Token from the supplied Facebook token."""
+    global FACEBOOK_PAGE_ID
+
     if not token:
         fail("Missing FACEBOOK_PAGE_ACCESS_TOKEN.")
 
