@@ -26,9 +26,7 @@ FACEBOOK_PAGE_ACCESS_TOKEN = os.environ.get(
 ).strip()
 
 OPENROUTER_API_KEY = os.environ.get("OPENROUTER_API_KEY", "").strip()
-OPENROUTER_MODEL = os.environ.get(
-    "OPENROUTER_MODEL", "openai/gpt-oss-20b:free"
-).strip()
+OPENROUTER_MODEL = "openai/gpt-oss-20b:free"
 
 try:
     SLOT = int(os.environ.get("POST_SLOT", "1"))
@@ -276,6 +274,20 @@ def _clean_ai_text(value) -> str:
     return str(value).strip()
 
 
+def _shorten_title(title: str, limit: int = 92) -> str:
+    title = re.sub(
+        r"\s+",
+        " ",
+        title.replace("eFootball™", "eFootball"),
+    ).strip()
+
+    if len(title) <= limit:
+        return title
+
+    shortened = title[: limit + 1].rsplit(" ", 1)[0].rstrip(" ,:-")
+    return shortened or title[:limit].rstrip()
+
+
 def deterministic_post(story: dict) -> dict:
     source_title = story["title"].split(" - ")[0].strip()
     clean_title = source_title.replace("eFootball™", "eFootball").strip()
@@ -287,33 +299,36 @@ def deterministic_post(story: dict) -> dict:
 
     if "national all-stars" in lower:
         body = (
-            "A fresh eFootball 2027 National All-Stars report is out today, "
-            "covering the upcoming Epic, Big Time and Show Time player cards. "
-            "The focus is on the new card lineup and upcoming content. "
-            "Keep an eye on official details before planning your squad. 🔥👀"
+            "A fresh eFootball 2027 report is covering the National All-Stars "
+            "content, including the latest Epic, Big Time and Show Time player cards. "
+            "More details are being tracked as the new content arrives. 🔥👀"
         )
     elif "live update" in lower or "ratings issue" in lower:
         body = (
             "KONAMI has reported an eFootball Live Update issue affecting "
-            "some player ratings. The notice says a fix is planned in a "
-            "future maintenance. 🚨📊"
+            "some player ratings, with a fix planned for a future maintenance. 🚨📊"
+        )
+    elif "campaign" in lower or "chance deals" in lower:
+        body = (
+            "A new eFootball 2027 campaign is being reported today, with "
+            "Chance Deals and player-content details attracting attention. 🔥🎁"
         )
     elif "update" in lower or "event" in lower:
         body = (
-            "A new eFootball update or event has been reported today. "
-            "We’re tracking the latest game changes, player content and "
-            "campaign details as they appear. 🔥"
+            "New eFootball coverage is out today, focusing on the latest "
+            "game update and event content. We’re tracking the details as they drop. 👀🔥"
         )
     else:
         body = (
-            "New eFootball 2027 coverage is out today. "
-            "We’re tracking the latest player content, updates and events "
-            "for the game. 👀🔥"
+            "New eFootball 2027 coverage is out today. We’re tracking the "
+            "latest player content, updates and events for the game. 👀🔥"
         )
+
+    title = _shorten_title(clean_title)
 
     version_tag = (
         "#eFootball2027"
-        if re.search(r"\b2027\b", clean_title, flags=re.I)
+        if re.search(r"\b2027\b", title, flags=re.I)
         else "#eFootball"
     )
 
@@ -328,10 +343,15 @@ def deterministic_post(story: dict) -> dict:
     )
 
     return {
-        "title": clean_title[:120],
-        "body": body[:700],
+        "title": title,
+        "body": body,
         "tags": tags,
-        "caption": f"{clean_title[:120]}\n\n{body[:700]}\n\n{tags}",
+        "caption": (
+            f"{title}\n\n"
+            f"{body}\n\n"
+            f"Source: {story.get('source', 'eFootball News')}\n\n"
+            f"{tags}"
+        ),
     }
 
 
@@ -921,6 +941,7 @@ def cleanup_legacy_posts(page_access_token: str) -> None:
         "1397515220100650_122095346487487467",
         "1397515220100650_122095351101487467",
         "1397515220100650_122095351917487467",
+        "1397515220100650_122095353603487467",
     ]
 
     for post_id in legacy_ids:
