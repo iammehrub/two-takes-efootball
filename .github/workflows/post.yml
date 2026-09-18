@@ -1,0 +1,92 @@
+name: Two Takes EFootball
+
+on:
+  workflow_dispatch:
+    inputs:
+      slot:
+        description: "Post slot"
+        required: true
+        type: choice
+        options:
+          - "1"
+          - "2"
+          - "3"
+          - "4"
+        default: "1"
+  schedule:
+    - cron: "15 10 * * *"
+      timezone: "Asia/Dhaka"
+    - cron: "15 14 * * *"
+      timezone: "Asia/Dhaka"
+    - cron: "15 18 * * *"
+      timezone: "Asia/Dhaka"
+    - cron: "15 22 * * *"
+      timezone: "Asia/Dhaka"
+
+permissions:
+  contents: write
+
+concurrency:
+  group: two-takes-efootball-posting
+  cancel-in-progress: false
+
+jobs:
+  post:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+
+      - name: Set post slot
+        id: slot
+        shell: bash
+        env:
+          EVENT_NAME: ${ github.event_name }
+          INPUT_SLOT: ${ inputs.slot }
+          SCHEDULE: ${ github.event.schedule }
+        run: |
+          if [ "$EVENT_NAME" = "workflow_dispatch" ]; then
+            echo "slot=$INPUT_SLOT" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          case "$SCHEDULE" in
+            "15 10 * * *") echo "slot=1" >> "$GITHUB_OUTPUT" ;;
+            "15 14 * * *") echo "slot=2" >> "$GITHUB_OUTPUT" ;;
+            "15 18 * * *") echo "slot=3" >> "$GITHUB_OUTPUT" ;;
+            "15 22 * * *") echo "slot=4" >> "$GITHUB_OUTPUT" ;;
+            *) echo "Unknown schedule: $SCHEDULE"; exit 1 ;;
+          esac
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Publish post
+        env:
+          FACEBOOK_PAGE_ACCESS_TOKEN: ${ secrets.FACEBOOK_PAGE_ACCESS_TOKEN }
+          FACEBOOK_PAGE_ID: ${ secrets.FACEBOOK_PAGE_ID }
+          GEMINI_API_KEY: ${ secrets.GEMINI_API_KEY }
+          PEXELS_API_KEY: ${ secrets.PEXELS_API_KEY }
+          POST_SLOT: ${ steps.slot.outputs.slot }
+        run: python main.py
+
+      - name: Commit posting history
+        shell: bash
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add data/state.json
+          if git diff --cached --quiet; then
+            echo "No state change to commit."
+            exit 0
+          fi
+          git commit -m "Update posting history"
+          git push
