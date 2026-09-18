@@ -338,6 +338,52 @@ def resolve_page_access_token(token: str) -> str:
         + ". Set FACEBOOK_PAGE_ID to the target Page's numeric ID."
     )
 
+def verify_page_publishing_access(access_token: str) -> None:
+    """Check the Page token identity and tasks before attempting to publish."""
+    response = requests.get(
+        f"https://graph.facebook.com/{FACEBOOK_PAGE_ID}",
+        params={
+            "fields": "id,name,tasks",
+            "access_token": access_token,
+        },
+        headers={"User-Agent": UA},
+        timeout=30,
+    )
+
+    if not response.ok:
+        fail(
+            "The resolved Page Access Token cannot read the target Page. "
+            f"HTTP {response.status_code}: {response.text[:700]}"
+        )
+
+    data = response.json()
+    page_id = str(data.get("id", ""))
+    tasks = data.get("tasks") or []
+    page_name = data.get("name", "unknown")
+
+    print(
+        f"Page token identity: {page_name} ({page_id}); "
+        f"tasks: {', '.join(tasks) if tasks else 'not returned'}"
+    )
+
+    if page_id != str(FACEBOOK_PAGE_ID):
+        fail(
+            "Resolved Page Access Token belongs to a different Page: "
+            f"{page_id}, expected {FACEBOOK_PAGE_ID}."
+        )
+
+    # Meta's Page task model uses CREATE_CONTENT for publishing content.
+    # Some API responses may omit tasks, so absence is diagnostic rather than
+    # an automatic failure; the publish call remains the final authority.
+    if tasks and "CREATE_CONTENT" not in tasks:
+        fail(
+            "The Page Access Token is valid for this Page but does not have "
+            "the CREATE_CONTENT task. Regenerate the Page token from the "
+            "Facebook account that has content-creation access to this Page, "
+            "with the app's Page-management permissions enabled."
+        )
+
+
 def publish_photo(caption: str, image_bytes: bytes, access_token: str) -> dict:
     response = requests.post(
         f"https://graph.facebook.com/{FACEBOOK_PAGE_ID}/photos",
@@ -415,6 +461,7 @@ def main() -> None:
     story = choose_story(stories, state)
     caption = call_gemini(story, config["name"])
     page_access_token = resolve_page_access_token(FACEBOOK_PAGE_ACCESS_TOKEN)
+    verify_page_publishing_access(page_access_token)
 
     image_bytes, image_url = search_pexels(config["pexels"])
 
