@@ -27,7 +27,7 @@ FACEBOOK_PAGE_ACCESS_TOKEN = os.environ.get(
 
 OPENROUTER_API_KEY = os.environ.get("OPENROUTER_API_KEY", "").strip()
 OPENROUTER_MODEL = os.environ.get(
-    "OPENROUTER_MODEL", "openrouter/free"
+    "OPENROUTER_MODEL", "meta-llama/llama-3.3-70b-instruct:free"
 ).strip()
 
 try:
@@ -277,34 +277,53 @@ def _clean_ai_text(value) -> str:
 
 
 def deterministic_post(story: dict) -> dict:
-    title = story["title"].split(" - ")[0].strip()
+    source_title = story["title"].split(" - ")[0].strip()
+    clean_title = source_title.replace("eFootball™", "eFootball").strip()
 
-    if "efootball" not in title.lower():
-        title = "eFootball: " + title
+    if "efootball" not in clean_title.lower():
+        clean_title = "eFootball: " + clean_title
+
+    description = story.get("description", "").strip()
+    description = re.sub(r"\s+", " ", description)
+    description = re.sub(r"\s*&nbsp;\s*", " ", description, flags=re.I)
+
+    # A useful fallback that summarizes the verified story without inventing
+    # details when the AI provider returns no final text.
+    if description and description.lower() != source_title.lower():
+        body = (
+            f"New eFootball coverage is out today on {story.get('source', 'the source')}. "
+            f"The report focuses on: {source_title}. "
+            "We’ll keep tracking the latest eFootball news, updates and player content."
+        )
     else:
-        title = title.replace("eFootball™", "eFootball")
-
-    summary = story.get("description", "").strip()
-
-    if not summary:
-        summary = (
-            "KONAMI has published a new eFootball update. "
-            "Check the official details for the latest information."
+        body = (
+            f"New eFootball news is out today: {clean_title}. "
+            "We’re tracking the latest updates, player content and events as they drop."
         )
 
-    body = summary[:650].rstrip()
+    version_tag = (
+        "#eFootball2027"
+        if re.search(r"\b2027\b", clean_title, flags=re.I)
+        else "#eFootball"
+    )
 
-    tags = (
-        "#eFootball #eFootball2026 #KONAMI "
-        "#eFootballNews #DreamTeam"
+    tags = " ".join(
+        [
+            "#eFootball",
+            version_tag,
+            "#KONAMI",
+            "#eFootballNews",
+            "#DreamTeam",
+        ]
     )
 
     return {
-        "title": title[:120],
-        "body": body,
+        "title": clean_title[:120],
+        "body": body[:700],
         "tags": tags,
-        "caption": f"{title[:120]}\n\n{body}\n\n{tags}",
+        "caption": f"{clean_title[:120]}\n\n{body[:700]}\n\n{tags}",
     }
+
 
 
 def parse_generated_post(raw: str, story: dict) -> dict:
@@ -871,6 +890,7 @@ def cleanup_legacy_posts(page_access_token: str) -> None:
     legacy_ids = [
         "1397515220100650_122095343775487467",
         "1397515220100650_122095346487487467",
+        "1397515220100650_122095351101487467",
     ]
 
     for post_id in legacy_ids:
