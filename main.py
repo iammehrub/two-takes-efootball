@@ -18,7 +18,8 @@ STATE_PATH.parent.mkdir(exist_ok=True)
 
 FACEBOOK_PAGE_ID = os.environ.get("FACEBOOK_PAGE_ID", "").strip()
 FACEBOOK_PAGE_ACCESS_TOKEN = os.environ.get("FACEBOOK_PAGE_ACCESS_TOKEN", "").strip()
-GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY", "").strip() or os.environ.get("GEMINI", "").strip()
+OPENROUTER_API_KEY = os.environ.get("OPENROUTER_API_KEY", "").strip()
+OPENROUTER_MODEL = os.environ.get("OPENROUTER_MODEL", "openrouter/free").strip()
 PEXELS_API_KEY = os.environ.get("PEXELS_API_KEY", "").strip() or os.environ.get("PEXELS", "").strip()
 GEMINI_MODEL = os.environ.get("GEMINI_MODEL", "gemini-3.1-flash-lite").strip()
 
@@ -109,8 +110,8 @@ def choose_story(items: list[dict], state: dict) -> dict:
     return items[0]
 
 
-def call_gemini(story: dict, slot_name: str) -> str:
-    """Generate a caption with retries for HTTP and network-level failures."""
+def call_ai(story: dict, slot_name: str) -> str:
+    """Generate a caption using OpenRouter's free-model router."""
     prompt = f"""
 You write social posts for an eFootball Facebook page called "Two Takes EFootball".
 
@@ -140,109 +141,102 @@ Summary: {story["description"]}
 URL: {story["link"]}
 """.strip()
 
-    models = []
-    for model in (
-        GEMINI_MODEL,
-        "gemini-3.1-flash-lite",
-        "gemini-2.5-flash-lite",
-    ):
-        if model and model not in models:
-            models.append(model)
+    if not OPENROUTER_API_KEY:
+        fail("Missing GitHub Actions secret: OPENROUTER_API_KEY")
 
+    endpoint = "https://openrouter.ai/api/v1/chat/completions"
+    headers = {
+        "Authorization": f"Bearer {OPENROUTER_API_KEY}",
+        "Content-Type": "application/json",
+        "HTTP-Referer": "https://github.com/iammehrub/two-takes-efootball",
+        "X-Title": "Two Takes EFootball",
+    }
+    payload = {
+        "model": OPENROUTER_MODEL,
+        "messages": [{"role": "user", "content": prompt}],
+        "temperature": 0.6,
+        "max_tokens": 220,
+    }
+
+    import time
     last_error = ""
 
-    for model in models:
-        endpoint = (
-            "https://generativelanguage.googleapis.com/v1beta/models/"
-            f"{model}:generateContent?key={GEMINI_API_KEY}"
-        )
-
-        payload = {
-            "contents": [{"parts": [{"text": prompt}]}],
-            "generationConfig": {
-                "temperature": 0.6,
-                "maxOutputTokens": 220,
-            },
-        }
-
-        for attempt in range(5):
-            try:
-                response = requests.post(
-                    endpoint,
-                    json=payload,
-                    headers={"Content-Type": "application/json"},
-                    timeout=(10, 30),
-                )
-            except (
-                requests.exceptions.Timeout,
-                requests.exceptions.ConnectionError,
-            ) as exc:
-                last_error = f"{model}: {type(exc).__name__}: {exc}"
-                if attempt < 4:
-                    delay = min(20, 2 ** attempt) + random.random()
-                    print(
-                        f"Gemini {model} network failure; "
-                        f"retrying in {delay:.1f}s..."
-                    )
-                    import time
-                    time.sleep(delay)
-                    continue
-                break
-
-            if response.ok:
-                try:
-                    data = response.json()
-                except ValueError:
-                    last_error = f"{model}: invalid JSON response."
-                    break
-
-                candidates = data.get("candidates", [])
-                if not candidates:
-                    last_error = f"{model}: no candidates returned: {data}"
-                    break
-
-                parts = candidates[0].get("content", {}).get("parts", [])
-                generated = "\n".join(
-                    p.get("text", "") for p in parts
-                ).strip()
-
-                if generated:
-                    print(f"Gemini caption generated with {model}.")
-                    return generated
-
-                last_error = f"{model}: empty response: {data}"
-                break
-
-            last_error = (
-                f"{model}: HTTP {response.status_code}: "
-                f"{response.text[:500]}"
+    for attempt in range(5):
+        try:
+            response = requests.post(
+                endpoint,
+                json=payload,
+                headers=headers,
+                timeout=(10, 35),
             )
-
-            # Retry rate limits and transient server failures.
-            if response.status_code == 429 or response.status_code >= 500:
-                if attempt < 4:
-                    retry_after = response.headers.get("Retry-After")
-                    try:
-                        delay = float(retry_after) if retry_after else min(20, 2 ** attempt)
-                    except ValueError:
-                        delay = min(20, 2 ** attempt)
-
-                    delay += random.random()
-                    print(
-                        f"Gemini {model} returned {response.status_code}; "
-                        f"retrying in {delay:.1f}s..."
-                    )
-                    import time
-                    time.sleep(delay)
-                    continue
-
-            # Authentication, invalid-model, and other client errors should
-            # move to the next model rather than looping pointlessly.
+        except (
+            requests.exceptions.Timeout,
+            requests.exceptions.ConnectionError,
+        ) as exc:
+            last_error = f"{type(exc).__name__}: {exc}"
+            if attempt < 4:
+                delay = min(15, 2 ** attempt) + random.random()
+                print(
+                    f"OpenRouter network failure; retrying in {delay:.1f}s..."
+                )
+                time.sleep(delay)
+                continue
             break
 
-        print(f"Trying next Gemini model after failure: {last_error}")
+        if response.ok:
+            try:
+                data = response.json()
+            except ValueError:
+                fail("OpenRouter returned invalid JSON.")
 
-    fail(f"All Gemini attempts failed. Last error: {last_error}")
+            choices = data.get("choices", [])
+            if not choices:
+                fail(f"OpenRouter returned no choices: {data}")
+
+            content = choices[0].get("message", {}).get("content", "")
+            if isinstance(content, list):
+                content = "\n".join(
+                    p.get("text", "")
+                    for p in content
+                    if isinstance(p, dict)
+                )
+
+            generated = str(content).strip()
+            if generated:
+                print(
+                    f"Caption generated with OpenRouter model {OPENROUTER_MODEL}."
+                )
+                return generated
+
+            fail(f"OpenRouter returned empty content: {data}")
+
+        last_error = f"HTTP {response.status_code}: {response.text[:700]}"
+
+        if response.status_code == 429 or response.status_code >= 500:
+            if attempt < 4:
+                retry_after = response.headers.get("Retry-After")
+                try:
+                    delay = (
+                        float(retry_after)
+                        if retry_after
+                        else min(15, 2 ** attempt)
+                    )
+                except ValueError:
+                    delay = min(15, 2 ** attempt)
+
+                delay += random.random()
+                print(
+                    f"OpenRouter returned {response.status_code}; "
+                    f"retrying in {delay:.1f}s..."
+                )
+                time.sleep(delay)
+                continue
+
+        break
+
+    fail(f"OpenRouter failed after retries. Last error: {last_error}")
+
+
 
 def search_pexels(query: str) -> tuple[bytes, str]:
     response = requests.get(
@@ -491,8 +485,8 @@ def main() -> None:
         missing.append("FACEBOOK_PAGE_ID")
     if not FACEBOOK_PAGE_ACCESS_TOKEN:
         missing.append("FACEBOOK_PAGE_ACCESS_TOKEN")
-    if not GEMINI_API_KEY:
-        missing.append("GEMINI_API_KEY")
+    if not OPENROUTER_API_KEY:
+        missing.append("OPENROUTER_API_KEY")
     if not PEXELS_API_KEY:
         missing.append("PEXELS_API_KEY")
 
@@ -507,7 +501,7 @@ def main() -> None:
 
     stories = fetch_google_news(config["query"])
     story = choose_story(stories, state)
-    caption = call_gemini(story, config["name"])
+    caption = call_ai(story, config["name"])
     page_access_token = resolve_page_access_token(FACEBOOK_PAGE_ACCESS_TOKEN)
     verify_page_publishing_access(page_access_token)
 
