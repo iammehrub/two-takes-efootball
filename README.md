@@ -21,6 +21,9 @@ Create these repository secrets under Settings → Secrets and variables → Act
 - FACEBOOK_PAGE_ACCESS_TOKEN
 - FACEBOOK_PAGE_ID
 - OPENROUTER_API_KEY
+- DISCORD_FACEBOOK_WEBHOOK
+- DISCORD_FACEBOOK_ANALYTICS_WEBHOOK
+- DISCORD_ALERTS_WEBHOOK
 
 Optional repository variable:
 
@@ -36,35 +39,8 @@ GitHub scheduled workflows can be delayed under load, so the exact posting minut
 
 Open Actions → Two Takes EFootball → Run workflow and select a post slot.
 
-Scheduled runs select the slot automatically from the scheduled time.
+## Discord split
 
-## Production safety
+This repository is responsible for Facebook content and Facebook analytics.
 
-- There is no push trigger, so editing the repository does not automatically publish a Facebook post.
-- Legacy Facebook post deletion is not part of the normal posting workflow.
-- The bot validates the selected story and generated caption before publishing.
-
-
-## Discord integration
-
-The automation can notify Discord through channel webhooks.
-
-Required Discord secrets:
-- DISCORD_FACEBOOK_WEBHOOK
-- DISCORD_FACEBOOK_ANALYTICS_WEBHOOK
-- DISCORD_BD_NEWS_WEBHOOK
-- DISCORD_ALERTS_WEBHOOK
-- DISCORD_YOUTUBE_PODCAST_WEBHOOK
-- DISCORD_YOUTUBE_SHORTS_WEBHOOK
-
-YouTube repository variables:
-- YOUTUBE_PODCAST_CHANNEL_ID
-- YOUTUBE_SHORTS_CHANNEL_ID
-
-Workflows:
-- Facebook posting sends a success/error notification.
-- Facebook analytics checks eligible posts hourly and sends a 12-hour engagement snapshot.
-- Bangladesh Top 5 news runs daily and sends five fresh stories when at least five pass filtering.
-- YouTube feeds are checked every 10 minutes and notify the matching Discord channel for new uploads.
-
-The YouTube watcher uses public channel RSS feeds and does not require a YouTube API key.
+The YouTube upload notifications and Bangladesh news feed are intentionally kept in the separate `iammehrub/the-two-takes` repository. This prevents the Facebook workflow from requiring YouTube channel IDs and caused the previous YouTube-variable alert spam to stop.
