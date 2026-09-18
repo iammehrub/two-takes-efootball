@@ -85,44 +85,11 @@ def notify_facebook_analytics(analysis: dict) -> bool:
     )
 
 
-def notify_bangladesh_news(items: list[dict], generated_at: str) -> bool:
-    fields = []
-    for index, item in enumerate(items[:5], start=1):
-        source = item.get("source", "Unknown")
-        link = item.get("link", "")
-        source_line = f"Source: {source}"
-        if link:
-            source_line += f"\n{link}"
-        fields.append((f"{index}. {item.get('title', 'Untitled')}", f"{item.get('summary', 'No summary available.')}\n{source_line}", False))
-    return send_webhook(
-        "DISCORD_BD_NEWS_WEBHOOK",
-        "🇧🇩 Bangladesh Top 5 News",
-        f"Top stories selected by recency, cross-source presence, and duplicate filtering. Updated: {generated_at}.",
-        fields=fields,
-        footer="Synapse Feed • Bangladesh",
-    )
-
-
-def notify_youtube_video(video: dict) -> bool:
-    return send_webhook(
-        "DISCORD_YOUTUBE_WEBHOOK",
-        "🎬 YouTube Video Published",
-        video.get("description", "")[:900] or "A new YouTube video was detected.",
-        fields=[
-            ("Title", video.get("title", "Untitled"), False),
-            ("Published", video.get("published", "Unknown"), True),
-            ("Channel", video.get("channel", "Unknown"), True),
-        ],
-        url=video.get("link", ""),
-        footer="YouTube • Two Takes",
-    )
-
-
 def notify_error(message: str, *, component: str = "Automation") -> bool:
     return send_webhook(
         "DISCORD_ALERTS_WEBHOOK",
         "🚨 Automation Error",
         _truncate(message, 3500),
         fields=[("Component", component, True)],
-        footer="System Alerts",
+        footer="System Alerts • Facebook Repo",
     )
