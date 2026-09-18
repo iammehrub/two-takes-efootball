@@ -30,8 +30,13 @@ FACEBOOK_PAGE_ACCESS_TOKEN = os.environ.get(
 OPENROUTER_API_KEY = os.environ.get("OPENROUTER_API_KEY", "").strip()
 OPENROUTER_MODEL = os.environ.get(
     "OPENROUTER_MODEL",
-    "openai/gpt-oss-20b",
+    "openrouter/free",
 ).strip()
+
+# The previous free GPT-OSS slug was retired. Keep older repository variables
+# working by transparently routing them through OpenRouter's current free router.
+if OPENROUTER_MODEL == "openai/gpt-oss-20b:free":
+    OPENROUTER_MODEL = "openrouter/free"
 
 try:
     SLOT = int(os.environ.get("POST_SLOT", "1"))
