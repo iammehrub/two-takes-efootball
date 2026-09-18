@@ -43,3 +43,28 @@ Scheduled runs select the slot automatically from the scheduled time.
 - There is no push trigger, so editing the repository does not automatically publish a Facebook post.
 - Legacy Facebook post deletion is not part of the normal posting workflow.
 - The bot validates the selected story and generated caption before publishing.
+
+
+## Discord integration
+
+The automation can notify Discord through channel webhooks.
+
+Required Discord secrets:
+- DISCORD_FACEBOOK_WEBHOOK
+- DISCORD_FACEBOOK_ANALYTICS_WEBHOOK
+- DISCORD_BD_NEWS_WEBHOOK
+- DISCORD_ALERTS_WEBHOOK
+- DISCORD_YOUTUBE_PODCAST_WEBHOOK
+- DISCORD_YOUTUBE_SHORTS_WEBHOOK
+
+YouTube repository variables:
+- YOUTUBE_PODCAST_CHANNEL_ID
+- YOUTUBE_SHORTS_CHANNEL_ID
+
+Workflows:
+- Facebook posting sends a success/error notification.
+- Facebook analytics checks eligible posts hourly and sends a 12-hour engagement snapshot.
+- Bangladesh Top 5 news runs daily and sends five fresh stories when at least five pass filtering.
+- YouTube feeds are checked every 10 minutes and notify the matching Discord channel for new uploads.
+
+The YouTube watcher uses public channel RSS feeds and does not require a YouTube API key.
