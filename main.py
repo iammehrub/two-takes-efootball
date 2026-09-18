@@ -4,6 +4,7 @@ import random
 import re
 import sys
 import xml.etree.ElementTree as ET
+from html import unescape
 from datetime import datetime, timezone
 from pathlib import Path
 from urllib.parse import quote_plus
@@ -66,7 +67,7 @@ def strip_html(text: str) -> str:
     return re.sub(r"\s+", " ", text).strip()
 
 
-def fetch_google_news(query: str, limit: int = 8) -> list[dict]:
+def fetch_google_news(query: str, limit: int = 12) -> list[dict]:
     url = (
         "https://news.google.com/rss/search?"
         f"q={quote_plus(query)}&hl=en-US&gl=US&ceid=US:en"
@@ -76,17 +77,20 @@ def fetch_google_news(query: str, limit: int = 8) -> list[dict]:
 
     root = ET.fromstring(response.content)
     items = []
+
     for item in root.findall("./channel/item")[:limit]:
         title = (item.findtext("title") or "").strip()
         link = (item.findtext("link") or "").strip()
         description = strip_html(item.findtext("description") or "")
         pub_date = (item.findtext("pubDate") or "").strip()
+
         source_node = item.find("source")
         source = (
             source_node.text.strip()
             if source_node is not None and source_node.text
             else ""
         )
+
         if title and link:
             items.append(
                 {
@@ -97,8 +101,63 @@ def fetch_google_news(query: str, limit: int = 8) -> list[dict]:
                     "source": source,
                 }
             )
+
     return items
 
+
+def is_efootball_story(story: dict) -> bool:
+    """Reject generic football stories that are not actually about eFootball."""
+    text = " ".join(
+        [
+            story.get("title", ""),
+            story.get("description", ""),
+            story.get("source", ""),
+        ]
+    ).lower()
+
+    required_signals = (
+        "efootball",
+        "e-football",
+        "e football",
+        "konami",
+        "dream team",
+        "special player list",
+        "epic player",
+        "booster player",
+        "efootball league",
+        "efootball points",
+        "efootball coins",
+        "master league",
+        "pes",
+    )
+    return any(signal in text for signal in required_signals)
+
+
+def choose_story(items: list[dict], state: dict) -> dict:
+    posted_links = {x.get("link") for x in state.get("posted", [])}
+
+    relevant = [
+        item for item in items
+        if item.get("link") not in posted_links
+        and is_efootball_story(item)
+    ]
+
+    if relevant:
+        return relevant[0]
+
+    # Do not publish generic football content just to fill the schedule.
+    relevant_old = [
+        item for item in items
+        if is_efootball_story(item)
+    ]
+
+    if relevant_old:
+        return relevant_old[0]
+
+    fail(
+        "No eFootball-specific story was found. "
+        "The bot will not publish generic football content."
+    )
 
 def choose_story(items: list[dict], state: dict) -> dict:
     posted_links = {x.get("link") for x in state.get("posted", [])}
@@ -123,13 +182,14 @@ player ratings, event details, pack contents, odds, or Konami statements.
 Write a Facebook post for an English + Banglish audience.
 Requirements:
 - 50 to 90 words.
-- Strong first line.
+- First line must be the post title.
+- Strong, specific eFootball headline.
 - Natural English/Banglish mix.
 - Mention eFootball clearly.
 - Add 2-4 relevant emojis.
 - End with ONE simple engagement question.
-- Add 3-6 relevant hashtags.
-- No markdown headings.
+- Add 4-7 relevant hashtags.
+- The output MUST use exactly this structure:\nTITLE: <short headline>\n\n<caption body>\n\nTAGS: <hashtags>\n- The title, body, and tags must all be specifically about eFootball.
 - Do not claim rumors are confirmed.
 - Do not mention that you are an AI.
 
@@ -238,12 +298,70 @@ URL: {story["link"]}
 
 
 
+def extract_og_image(article_url: str) -> tuple[bytes, str]:
+    """Try to use the article's own Open Graph image first."""
+    try:
+        response = requests.get(
+            article_url,
+            headers={"User-Agent": UA},
+            timeout=(10, 20),
+            allow_redirects=True,
+        )
+        if not response.ok:
+            return b"", ""
+
+        html = response.text[:2_000_000]
+        patterns = [
+            r'<meta[^>]+property=["\\']og:image["\\'][^>]+content=["\\']([^"\\']+)["\\']',
+            r'<meta[^>]+content=["\\']([^"\\']+)["\\'][^>]+property=["\\']og:image["\\']',
+            r'<meta[^>]+name=["\\']twitter:image["\\'][^>]+content=["\\']([^"\\']+)["\\']',
+            r'<meta[^>]+content=["\\']([^"\\']+)["\\'][^>]+name=["\\']twitter:image["\\']',
+        ]
+
+        image_url = ""
+        for pattern in patterns:
+            match = re.search(pattern, html, flags=re.IGNORECASE)
+            if match:
+                image_url = unescape(match.group(1)).strip()
+                break
+
+        if not image_url:
+            return b"", ""
+
+        image = requests.get(
+            image_url,
+            headers={"User-Agent": UA},
+            timeout=(10, 25),
+        )
+        if image.ok and image.content:
+            content_type = image.headers.get("Content-Type", "")
+            if content_type.startswith("image/"):
+                return image.content, image_url
+
+    except (
+        requests.exceptions.Timeout,
+        requests.exceptions.ConnectionError,
+    ):
+        pass
+    except Exception as exc:
+        print(f"Article image extraction failed: {exc}")
+
+    return b"", ""
+
+
 def search_pexels(query: str) -> tuple[bytes, str]:
     response = requests.get(
         "https://api.pexels.com/v1/search",
-        params={"query": query, "per_page": 12, "orientation": "landscape"},
-        headers={"Authorization": PEXELS_API_KEY, "User-Agent": UA},
-        timeout=25,
+        params={
+            "query": query,
+            "per_page": 12,
+            "orientation": "landscape",
+        },
+        headers={
+            "Authorization": PEXELS_API_KEY,
+            "User-Agent": UA,
+        },
+        timeout=(10, 25),
     )
     response.raise_for_status()
 
@@ -262,138 +380,21 @@ def search_pexels(query: str) -> tuple[bytes, str]:
         if not image_url:
             continue
 
-        image = requests.get(
-            image_url,
-            headers={"User-Agent": UA},
-            timeout=30,
-        )
-        if image.ok and image.content:
-            return image.content, image_url
+        try:
+            image = requests.get(
+                image_url,
+                headers={"User-Agent": UA},
+                timeout=(10, 25),
+            )
+            if image.ok and image.content:
+                return image.content, image_url
+        except (
+            requests.exceptions.Timeout,
+            requests.exceptions.ConnectionError,
+        ):
+            continue
 
     return b"", ""
-
-
-def resolve_page_access_token(token: str) -> str:
-    """Resolve a Page Access Token and validate its Page task from /me/accounts."""
-    global FACEBOOK_PAGE_ID
-
-    me = requests.get(
-        "https://graph.facebook.com/me",
-        params={"fields": "id,name", "access_token": token},
-        headers={"User-Agent": UA},
-        timeout=30,
-    )
-
-    if me.ok:
-        me_data = me.json()
-        print(
-            f"Facebook token identity: "
-            f"{me_data.get('name', 'unknown')} ({me_data.get('id', 'unknown')})"
-        )
-
-        # If the supplied token itself is a Page token, use it directly.
-        if str(me_data.get("id", "")) == str(FACEBOOK_PAGE_ID):
-            print("Configured Page ID matches the supplied Page Access Token.")
-            return token
-
-    response = requests.get(
-        "https://graph.facebook.com/me/accounts",
-        params={
-            "fields": "id,name,access_token,tasks",
-            "access_token": token,
-        },
-        headers={"User-Agent": UA},
-        timeout=30,
-    )
-
-    if not response.ok:
-        fail(
-            "Facebook token cannot list Pages. "
-            f"/me/accounts returned HTTP {response.status_code}: "
-            f"{response.text[:700]}"
-        )
-
-    pages = response.json().get("data", [])
-    if not pages:
-        fail(
-            "This Facebook token has access to no Pages through /me/accounts. "
-            "Generate it from the Facebook account that has access to the "
-            "target Page and grant the required Page permissions."
-        )
-
-    # Exact configured-page match.
-    for page in pages:
-        page_id = str(page.get("id", ""))
-        if page_id == str(FACEBOOK_PAGE_ID):
-            page_token = (page.get("access_token") or "").strip()
-            tasks = page.get("tasks") or []
-
-            if not page_token:
-                fail(
-                    f"Meta found {page.get('name', 'the Page')} "
-                    f"({page_id}) but did not return a Page Access Token."
-                )
-
-            print(
-                f"Found configured Page: {page.get('name', 'unknown')} "
-                f"({page_id})."
-            )
-            print(
-                "Page tasks: "
-                + (", ".join(tasks) if tasks else "not returned")
-            )
-
-            if tasks and "CREATE_CONTENT" not in tasks:
-                fail(
-                    "The Facebook account can access this Page, but Meta did "
-                    "not grant the CREATE_CONTENT task to this token. "
-                    "Regenerate the User Access Token with pages_show_list, "
-                    "pages_read_engagement, and pages_manage_posts, then "
-                    "derive a fresh Page Access Token."
-                )
-
-            return page_token
-
-    # Safe auto-detection when the token can access exactly one Page.
-    if len(pages) == 1:
-        page = pages[0]
-        page_id = str(page.get("id", ""))
-        page_token = (page.get("access_token") or "").strip()
-        tasks = page.get("tasks") or []
-        page_name = page.get("name", "unknown")
-
-        if not page_token:
-            fail(
-                f"Meta found {page_name} ({page_id}) but did not return "
-                "a Page Access Token."
-            )
-
-        print(
-            f"Configured Page ID did not match. Using the only Page visible "
-            f"to this token: {page_name} ({page_id})."
-        )
-        print(
-            "Page tasks: " + (", ".join(tasks) if tasks else "not returned")
-        )
-
-        if tasks and "CREATE_CONTENT" not in tasks:
-            fail(
-                "The only Page visible to this token does not have the "
-                "CREATE_CONTENT task."
-            )
-
-        FACEBOOK_PAGE_ID = page_id
-        return page_token
-
-    visible = [
-        f"{p.get('name', 'unknown')} ({p.get('id', 'unknown')})"
-        for p in pages
-    ]
-    fail(
-        "FACEBOOK_PAGE_ID does not match a Page visible to the token. "
-        "Visible Pages: " + "; ".join(visible)
-    )
-
 
 def verify_page_publishing_access(access_token: str) -> None:
     """Validate only the Page identity; task data comes from /me/accounts."""
@@ -499,13 +500,15 @@ def main() -> None:
     config = SLOT_CONFIG[SLOT]
     state = load_state()
 
-    stories = fetch_google_news(config["query"])
+    stories = fetch_google_news(config["query"] + " eFootball")
     story = choose_story(stories, state)
     caption = call_ai(story, config["name"])
     page_access_token = resolve_page_access_token(FACEBOOK_PAGE_ACCESS_TOKEN)
     verify_page_publishing_access(page_access_token)
 
-    image_bytes, image_url = search_pexels(config["pexels"])
+    image_bytes, image_url = extract_og_image(story["link"])
+    if not image_bytes:
+        image_bytes, image_url = search_pexels("eFootball " + config["pexels"])
 
     if image_bytes:
         result = publish_photo(caption, image_bytes, page_access_token)
