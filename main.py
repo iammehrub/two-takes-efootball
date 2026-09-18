@@ -26,7 +26,7 @@ FACEBOOK_PAGE_ACCESS_TOKEN = os.environ.get(
 ).strip()
 
 OPENROUTER_API_KEY = os.environ.get("OPENROUTER_API_KEY", "").strip()
-OPENROUTER_MODEL = "openai/gpt-oss-20b:free"
+OPENROUTER_MODEL = "qwen/qwen3-235b-a22b-2507:free"
 
 try:
     SLOT = int(os.environ.get("POST_SLOT", "1"))
@@ -284,47 +284,90 @@ def _shorten_title(title: str, limit: int = 92) -> str:
     if len(title) <= limit:
         return title
 
-    shortened = title[: limit + 1].rsplit(" ", 1)[0].rstrip(" ,:-")
+    # Prefer cutting at a natural punctuation boundary.
+    for marker in (":", " - ", " — ", " | "):
+        pos = title.find(marker)
+        if 30 <= pos <= limit:
+            return title[:pos].rstrip(" :-—|")
+
+    words = title[:limit + 1].rsplit(" ", 1)
+    shortened = words[0].rstrip(" ,:-—")
     return shortened or title[:limit].rstrip()
 
 
-def deterministic_post(story: dict) -> dict:
-    source_title = story["title"].split(" - ")[0].strip()
-    clean_title = source_title.replace("eFootball™", "eFootball").strip()
+def _topic_fallback_title(source_title: str) -> str:
+    title = source_title.replace("eFootball™", "eFootball").strip()
+    lower = title.lower()
 
-    if "efootball" not in clean_title.lower():
-        clean_title = "eFootball: " + clean_title
-
-    lower = clean_title.lower()
+    if "international match campaign" in lower:
+        return "eFootball 2027: International Match Campaign Brings Free Chance Deals"
 
     if "national all-stars" in lower:
+        return "eFootball 2027: National All-Stars Content Arrives"
+
+    if "live update" in lower or "ratings issue" in lower:
+        return "eFootball Live Update: KONAMI Reports a Player Ratings Issue"
+
+    if "unavailable players" in lower and "managers" in lower:
+        return "eFootball: KONAMI Addresses Unavailable Players & Managers"
+
+    if "epic" in lower and "big time" in lower:
+        return "eFootball 2027: New Epic & Big Time Cards Revealed"
+
+    if "show time" in lower:
+        return "eFootball 2027: New Show Time Player Cards Revealed"
+
+    if "potw" in lower or "player of the week" in lower:
+        return "eFootball 2027: New POTW Player Cards Arrive"
+
+    return _shorten_title(title, 88)
+
+
+def _topic_fallback_body(story: dict) -> str:
+    title = story["title"].split(" - ")[0].strip()
+    clean = story.get("description", "").strip()
+    clean = re.sub(r"\s+", " ", clean)
+    clean = re.sub(r"(?i)\s*&nbsp;\s*", " ", clean)
+    clean = clean.strip(" -")
+
+    lower = title.lower()
+
+    if "international match campaign" in lower:
         body = (
-            "A fresh eFootball 2027 report is covering the National All-Stars "
-            "content, including the latest Epic, Big Time and Show Time player cards. "
-            "More details are being tracked as the new content arrives. 🔥👀"
+            "The International Match Campaign is now the focus in eFootball 2027, "
+            "with free Chance Deals and National All-Stars content featured in the rollout. "
+            "Eric Cantona is also part of the campaign lineup. 🔥🎁"
         )
     elif "live update" in lower or "ratings issue" in lower:
         body = (
-            "KONAMI has reported an eFootball Live Update issue affecting "
-            "some player ratings, with a fix planned for a future maintenance. 🚨📊"
+            "KONAMI has reported an issue affecting eFootball Live Update player ratings "
+            "and says the problem is being addressed. Keep an eye on the next maintenance "
+            "for the latest status. 🚨📊"
         )
-    elif "campaign" in lower or "chance deals" in lower:
+    elif "unavailable players" in lower and "managers" in lower:
         body = (
-            "A new eFootball 2027 campaign is being reported today, with "
-            "Chance Deals and player-content details attracting attention. 🔥🎁"
+            "KONAMI has published an eFootball notice about unavailable players and managers. "
+            "Check the official update details before making changes to your squad. 👀"
         )
-    elif "update" in lower or "event" in lower:
-        body = (
-            "New eFootball coverage is out today, focusing on the latest "
-            "game update and event content. We’re tracking the details as they drop. 👀🔥"
-        )
+    elif clean and clean.lower() != title.lower():
+        sentences = re.split(r"(?<=[.!?])\s+", clean)
+        usable = " ".join(sentences[:2]).strip()
+        body = usable[:650]
     else:
         body = (
-            "New eFootball 2027 coverage is out today. We’re tracking the "
-            "latest player content, updates and events for the game. 👀🔥"
+            f"{_topic_fallback_title(title)}. "
+            "We’re tracking the latest eFootball details, player content and updates. 🔥"
         )
 
-    title = _shorten_title(clean_title)
+    return body
+
+
+def deterministic_post(story: dict) -> dict:
+    title = _topic_fallback_title(story["title"].split(" - ")[0].strip())
+    body = _topic_fallback_body(story)
+
+    if "efootball" not in title.lower():
+        title = "eFootball: " + title
 
     version_tag = (
         "#eFootball2027"
@@ -332,25 +375,28 @@ def deterministic_post(story: dict) -> dict:
         else "#eFootball"
     )
 
-    tags = " ".join(
-        [
-            "#eFootball",
-            version_tag,
-            "#KONAMI",
-            "#eFootballNews",
-            "#DreamTeam",
-        ]
-    )
+    tags = []
+    for tag in (
+        "#eFootball",
+        version_tag,
+        "#KONAMI",
+        "#eFootballNews",
+        "#DreamTeam",
+    ):
+        if tag.lower() not in {x.lower() for x in tags}:
+            tags.append(tag)
+
+    tags_text = " ".join(tags)
 
     return {
         "title": title,
-        "body": body,
-        "tags": tags,
+        "body": body[:700],
+        "tags": tags_text,
         "caption": (
             f"{title}\n\n"
-            f"{body}\n\n"
+            f"{body[:700]}\n\n"
             f"Source: {story.get('source', 'eFootball News')}\n\n"
-            f"{tags}"
+            f"{tags_text}"
         ),
     }
 
@@ -479,10 +525,7 @@ URL:
             }
         ],
         "temperature": 0.3,
-        "max_tokens": 320,
-        "reasoning": {
-            "exclude": True,
-        },
+        "max_tokens": 420,
     }
 
     headers = {
@@ -493,9 +536,6 @@ URL:
     }
 
     models = [OPENROUTER_MODEL]
-    if "openrouter/free" not in models:
-        models.append("openrouter/free")
-
     last_error = ""
 
     for model in models:
@@ -942,6 +982,7 @@ def cleanup_legacy_posts(page_access_token: str) -> None:
         "1397515220100650_122095351101487467",
         "1397515220100650_122095351917487467",
         "1397515220100650_122095353603487467",
+        "1397515220100650_122095355559487467",
     ]
 
     for post_id in legacy_ids:
