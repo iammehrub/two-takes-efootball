@@ -74,6 +74,62 @@ def fetch_metrics(post_id: str, token: str) -> dict:
     }
 
 
+
+def resolve_page_access_token(token: str, page_id: str) -> str:
+    response = requests.get(
+        "https://graph.facebook.com/me/accounts",
+        params={
+            "fields": "id,name,access_token",
+            "access_token": token,
+        },
+        timeout=(10, 30),
+    )
+    if not response.ok:
+        raise RuntimeError(
+            f"Could not resolve Facebook Page token: HTTP {response.status_code}: {response.text[:700]}"
+        )
+    pages = response.json().get("data", [])
+    for page in pages:
+        if str(page.get("id", "")) == str(page_id):
+            page_token = str(page.get("access_token", "")).strip()
+            if page_token:
+                return page_token
+    if len(pages) == 1:
+        page_token = str(pages[0].get("access_token", "")).strip()
+        if page_token:
+            return page_token
+    return token
+
+
+def fetch_recent_page_posts(page_id: str, token: str) -> list[dict]:
+    response = requests.get(
+        f"https://graph.facebook.com/{page_id}/posts",
+        params={
+            "fields": "id,created_time,message",
+            "limit": 25,
+            "access_token": token,
+        },
+        timeout=(10, 30),
+    )
+    if not response.ok:
+        raise RuntimeError(
+            f"Facebook recent-post lookup failed: HTTP {response.status_code}: {response.text[:700]}"
+        )
+    result = []
+    for item in response.json().get("data", []):
+        post_id = str(item.get("id", "")).strip()
+        created = parse_dt(item.get("created_time", ""))
+        message = str(item.get("message", "")).strip()
+        if post_id and created:
+            title = message.splitlines()[0].strip() if message else "Facebook post"
+            result.append({
+                "facebook_id": post_id,
+                "posted_at": created.isoformat(),
+                "title": title[:110],
+                "slot": "?",
+            })
+    return result
+
 def build_summary(a: dict) -> str:
     text = (
         f"At about {a['age_hours']:.1f} hours, Facebook returned "
@@ -96,6 +152,8 @@ def main() -> None:
     if not token or not page_id:
         raise RuntimeError("Missing FACEBOOK_PAGE_ACCESS_TOKEN or FACEBOOK_PAGE_ID.")
 
+    page_token = resolve_page_access_token(token, page_id)
+
     posted_state = load_json(POST_STATE_PATH, {"posted": []})
     analytics_state = load_json(ANALYTICS_STATE_PATH, {"processed": [], "history": []})
     processed = {str(x) for x in analytics_state.get("processed", [])}
@@ -113,6 +171,25 @@ def main() -> None:
             eligible.append((posted_at, entry, age_hours))
 
     eligible.sort(key=lambda x: x[0])
+
+    # Backfill a recent Facebook Page post when repository state is empty.
+    # This lets the analytics workflow test existing Page content and recover
+    # from state resets without requiring a new publication first.
+    if not eligible:
+        try:
+            recent_posts = fetch_recent_page_posts(page_id, page_token)
+            for entry in recent_posts:
+                post_id = str(entry.get("facebook_id", "")).strip()
+                posted_at = parse_dt(entry.get("posted_at", ""))
+                if not post_id or not posted_at or post_id in processed:
+                    continue
+                age_hours = (now - posted_at).total_seconds() / 3600
+                if age_hours >= 12:
+                    eligible.append((posted_at, entry, age_hours))
+            eligible.sort(key=lambda x: x[0])
+        except Exception as exc:
+            print(f"Facebook backfill lookup failed: {exc}")
+
     if not eligible:
         print("No Facebook posts are ready for 12-hour analysis.")
         return
@@ -120,7 +197,7 @@ def main() -> None:
     for _, entry, age_hours in eligible:
         post_id = str(entry["facebook_id"])
         try:
-            metrics = fetch_metrics(post_id, token)
+            metrics = fetch_metrics(post_id, page_token)
         except Exception as exc:
             print(f"Could not analyze {post_id}: {exc}")
             notify_error(str(exc), component="Facebook 12-hour analytics")
