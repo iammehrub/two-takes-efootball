@@ -77,6 +77,8 @@ jobs:
           OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
           OPENROUTER_MODEL: ${{ vars.OPENROUTER_MODEL || 'openai/gpt-oss-20b:free' }}
           POST_SLOT: ${{ steps.slot.outputs.slot }}
+          DISCORD_FACEBOOK_WEBHOOK: ${{ secrets.DISCORD_FACEBOOK_WEBHOOK }}
+          DISCORD_ALERTS_WEBHOOK: ${{ secrets.DISCORD_ALERTS_WEBHOOK }}
         run: python main.py
 
       - name: Commit posting history
