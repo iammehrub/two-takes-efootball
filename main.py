@@ -209,12 +209,41 @@ def search_pexels(query: str) -> tuple[bytes, str]:
 
 
 def resolve_page_access_token(token: str) -> str:
-    """Accept either a User Access Token or a Page Access Token.
+    """Resolve a Page Access Token from the supplied Facebook token.
 
-    When a User Access Token is supplied, ask Meta for the Page Access Token
-    belonging to FACEBOOK_PAGE_ID. The returned Page token is then used for
-    publishing.
+    The supplied secret may be either:
+    - a User Access Token with Page permissions, or
+    - an actual Page Access Token.
+
+    We never silently fall back to a User Access Token for publishing.
     """
+    errors = []
+
+    # Preferred route when we already know the Page ID.
+    response = requests.get(
+        f"https://graph.facebook.com/{FACEBOOK_PAGE_ID}",
+        params={
+            "fields": "id,name,access_token",
+            "access_token": token,
+        },
+        headers={"User-Agent": UA},
+        timeout=30,
+    )
+
+    if response.ok:
+        data = response.json()
+        page_token = (data.get("access_token") or "").strip()
+        if str(data.get("id")) == str(FACEBOOK_PAGE_ID) and page_token:
+            print(f"Resolved Page access token for {data.get('name', FACEBOOK_PAGE_ID)}.")
+            return page_token
+        errors.append("Page endpoint returned no Page access_token.")
+
+    else:
+        errors.append(
+            f"Page endpoint {response.status_code}: {response.text[:500]}"
+        )
+
+    # Fallback route from Meta's Pages API token flow.
     response = requests.get(
         "https://graph.facebook.com/me/accounts",
         params={
@@ -230,17 +259,22 @@ def resolve_page_access_token(token: str) -> str:
         for page in data.get("data", []):
             if str(page.get("id")) == str(FACEBOOK_PAGE_ID):
                 page_token = (page.get("access_token") or "").strip()
-                tasks = page.get("tasks") or []
                 if page_token:
-                    print(
-                        f"Resolved Page access token for {page.get('name', FACEBOOK_PAGE_ID)}. "
-                        f"Tasks: {', '.join(tasks) if tasks else 'not returned'}"
-                    )
+                    print(f"Resolved Page access token for {page.get('name', FACEBOOK_PAGE_ID)}.")
                     return page_token
+        errors.append("Page was not returned by /me/accounts.")
+    else:
+        errors.append(
+            f"/me/accounts {response.status_code}: {response.text[:500]}"
+        )
 
-    # If the supplied token is already a Page token, keep it.
-    return token
-
+    fail(
+        "Could not obtain a Page Access Token for FACEBOOK_PAGE_ID. "
+        "The GitHub secret must contain either a valid User Access Token with "
+        "pages_show_list, pages_read_engagement, and pages_manage_posts, or "
+        "a valid Page Access Token. Details: "
+        + " | ".join(errors)
+    )
 
 def publish_photo(caption: str, image_bytes: bytes, access_token: str) -> dict:
     response = requests.post(
