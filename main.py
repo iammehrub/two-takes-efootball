@@ -11,6 +11,7 @@ from pathlib import Path
 from urllib.parse import quote_plus
 
 import requests
+from PIL import Image, ImageDraw, ImageFont
 
 ROOT = Path(__file__).resolve().parent
 STATE_PATH = ROOT / "data" / "state.json"
@@ -200,34 +201,103 @@ def choose_story(items: list[dict], state: dict) -> dict:
 
 
 
-def call_ai(story: dict, slot_name: str) -> str:
-    """Generate a caption using OpenRouter's free-model router."""
+def _clean_ai_text(value) -> str:
+    if value is None:
+        return ""
+    if isinstance(value, list):
+        return "\n".join(
+            p.get("text", "")
+            for p in value
+            if isinstance(p, dict) and p.get("text")
+        ).strip()
+    return str(value).strip()
+
+
+def parse_generated_post(raw: str, story: dict, slot_name: str) -> dict:
+    raw = _clean_ai_text(raw)
+    if not raw or raw.lower() in {"none", "null"}:
+        return {}
+
+    title_match = re.search(r"(?im)^TITLE:\s*(.+?)\s*$", raw)
+    tags_match = re.search(r"(?im)^TAGS:\s*(.+?)\s*$", raw)
+
+    title = title_match.group(1).strip() if title_match else ""
+    tags = tags_match.group(1).strip() if tags_match else ""
+
+    body_start = title_match.end() if title_match else 0
+    body_end = tags_match.start() if tags_match else len(raw)
+    body = raw[body_start:body_end].strip()
+
+    # Remove accidental labels/repeated headings.
+    body = re.sub(r"(?im)^TITLE:\s*.*$", "", body).strip()
+    body = re.sub(r"(?im)^TAGS:\s*.*$", "", body).strip()
+
+    if not title:
+        title = story["title"].split(" - ")[0].strip()
+
+    if "efootball" not in title.lower():
+        title = "eFootball: " + title
+
+    if not body:
+        summary = story.get("description", "").strip()
+        if summary:
+            body = summary[:700].rstrip()
+        else:
+            body = (
+                "KONAMI has shared a new eFootball update. "
+                "Check the official details before jumping into the game."
+            )
+
+    if not tags:
+        tags = (
+            "#eFootball #eFootball2026 #KONAMI "
+            "#eFootballNews #DreamTeam"
+        )
+
+    # Keep only hashtag tokens and cap the number.
+    hashtag_tokens = re.findall(r"#[A-Za-z0-9_]+", tags)
+    if not hashtag_tokens:
+        hashtag_tokens = [
+            "#eFootball",
+            "#eFootball2026",
+            "#KONAMI",
+            "#eFootballNews",
+            "#DreamTeam",
+        ]
+    tags = " ".join(dict.fromkeys(hashtag_tokens[:7]))
+
+    return {
+        "title": title,
+        "body": body,
+        "tags": tags,
+        "caption": f"{title}\n\n{body}\n\n{tags}",
+    }
+
+
+def call_ai(story: dict, slot_name: str) -> dict:
+    """Generate and validate title/body/tags through OpenRouter."""
     prompt = f"""
-You write social posts for an eFootball Facebook page called "Two Takes EFootball".
+You write posts for the Facebook page "Two Takes EFootball".
+
+This is an eFootball-specific news post.
 
 Content type: {slot_name}
 
-Use ONLY facts supported by the supplied source. Do not invent release dates,
-player ratings, event details, pack contents, odds, or Konami statements.
+STRICT RULES:
+- Use ONLY facts present in the supplied source.
+- Never invent player ratings, events, dates, rewards, pack contents, or quotes.
+- Do not discuss real-world football unless it is directly part of the eFootball source.
+- The title MUST be specifically about eFootball.
+- Output EXACTLY:
+TITLE: <short eFootball headline>
 
-Write a Facebook post for an English + Banglish audience.
-Requirements:
-- 50 to 90 words.
-- First line must be the post title.
-- Strong, specific eFootball headline.
-- Natural English/Banglish mix.
-- Mention eFootball clearly.
-- Add 2-4 relevant emojis.
-- End with ONE simple engagement question.
-- Add 4-7 relevant hashtags.
-- The output MUST use exactly this structure:\nTITLE: <short headline>\n\n<caption body>\n\nTAGS: <hashtags>\n- The title, body, and tags must all be specifically about eFootball.\n- The title must mention "eFootball" or a clearly eFootball-specific feature/player/event.\n- Never write a generic football-news headline.\n- Do not use generic hooks that could describe FIFA/EA FC/real football instead of eFootball.
-- Do not claim rumors are confirmed.
-- Do not mention that you are an AI.
+<body, 45-80 words>
 
-SOURCE:
-Title: {story["title"]}
-Publisher: {story["source"]}
-Date: {story["pub_date"]}
+TAGS: <4-7 hashtags>
+
+Source title: {story["title"]}
+Source: {story["source"]}
+Published: {story["pub_date"]}
 Summary: {story["description"]}
 URL: {story["link"]}
 """.strip()
@@ -245,7 +315,7 @@ URL: {story["link"]}
     payload = {
         "model": OPENROUTER_MODEL,
         "messages": [{"role": "user", "content": prompt}],
-        "temperature": 0.6,
+        "temperature": 0.35,
         "max_tokens": 220,
     }
 
@@ -282,24 +352,28 @@ URL: {story["link"]}
 
             choices = data.get("choices", [])
             if not choices:
-                fail(f"OpenRouter returned no choices: {data}")
+                last_error = f"OpenRouter returned no choices: {data}"
+                break
 
-            content = choices[0].get("message", {}).get("content", "")
-            if isinstance(content, list):
-                content = "\n".join(
-                    p.get("text", "")
-                    for p in content
-                    if isinstance(p, dict)
-                )
+            message = choices[0].get("message") or {}
+            content = _clean_ai_text(message.get("content"))
 
-            generated = str(content).strip()
-            if generated:
+            if not content:
+                content = _clean_ai_text(choices[0].get("text"))
+
+            parsed = parse_generated_post(content, story, slot_name)
+            if parsed:
                 print(
-                    f"Caption generated with OpenRouter model {OPENROUTER_MODEL}."
+                    f"Caption generated with OpenRouter model "
+                    f"{OPENROUTER_MODEL}."
                 )
-                return generated
+                return parsed
 
-            fail(f"OpenRouter returned empty content: {data}")
+            last_error = (
+                f"OpenRouter returned empty/invalid content: "
+                f"{str(data)[:700]}"
+            )
+            break
 
         last_error = f"HTTP {response.status_code}: {response.text[:700]}"
 
@@ -325,194 +399,129 @@ URL: {story["link"]}
 
         break
 
+    # Deterministic fallback: never publish "None".
+    fallback = parse_generated_post(
+        "",
+        story,
+        slot_name,
+    )
+    if fallback:
+        print("OpenRouter failed; using deterministic source-based fallback caption.")
+        return fallback
+
     fail(f"OpenRouter failed after retries. Last error: {last_error}")
 
 
 
-def extract_og_image(article_url: str) -> tuple[bytes, str]:
-    """Try to use the article's own Open Graph image first."""
-    try:
-        response = requests.get(
-            article_url,
-            headers={"User-Agent": UA},
-            timeout=(10, 20),
-            allow_redirects=True,
-        )
-        if not response.ok:
-            return b"", ""
-
-        html = response.text[:2_000_000]
-        patterns = [
-            r"<meta[^>]+property=[\"']og:image[\"'][^>]+content=[\"']([^\"']+)[\"']",
-            r"<meta[^>]+content=[\"']([^\"']+)[\"'][^>]+property=[\"']og:image[\"']",
-            r"<meta[^>]+name=[\"']twitter:image[\"'][^>]+content=[\"']([^\"']+)[\"']",
-            r"<meta[^>]+content=[\"']([^\"']+)[\"'][^>]+name=[\"']twitter:image[\"']",
-        ]
-
-        image_url = ""
-        for pattern in patterns:
-            match = re.search(pattern, html, flags=re.IGNORECASE)
-            if match:
-                image_url = unescape(match.group(1)).strip()
-                break
-
-        if not image_url:
-            return b"", ""
-
-        image = requests.get(
-            image_url,
-            headers={"User-Agent": UA},
-            timeout=(10, 25),
-        )
-        if image.ok and image.content:
-            content_type = image.headers.get("Content-Type", "")
-            if content_type.startswith("image/"):
-                return image.content, image_url
-
-    except (
-        requests.exceptions.Timeout,
-        requests.exceptions.ConnectionError,
-    ):
-        pass
-    except Exception as exc:
-        print(f"Article image extraction failed: {exc}")
-
-    return b"", ""
-
-
-
-def search_pexels(query: str) -> tuple[bytes, str]:
-    response = requests.get(
-        "https://api.pexels.com/v1/search",
-        params={
-            "query": query,
-            "per_page": 12,
-            "orientation": "landscape",
-        },
-        headers={
-            "Authorization": PEXELS_API_KEY,
-            "User-Agent": UA,
-        },
-        timeout=(10, 25),
-    )
-    response.raise_for_status()
-
-    photos = response.json().get("photos", [])
-    if not photos:
-        return b"", ""
-
-    random.shuffle(photos)
-    for photo in photos:
-        src = photo.get("src", {})
-        image_url = (
-            src.get("large2x")
-            or src.get("large")
-            or src.get("original")
-        )
-        if not image_url:
-            continue
-
-        try:
-            image = requests.get(
-                image_url,
-                headers={"User-Agent": UA},
-                timeout=(10, 25),
-            )
-            if image.ok and image.content:
-                return image.content, image_url
-        except (
-            requests.exceptions.Timeout,
-            requests.exceptions.ConnectionError,
-        ):
-            continue
-
-    return b"", ""
-
-def resolve_page_access_token(token: str) -> str:
-    """Resolve the Page Access Token for FACEBOOK_PAGE_ID."""
-    global FACEBOOK_PAGE_ID
-
-    response = requests.get(
-        "https://graph.facebook.com/me/accounts",
-        params={
-            "fields": "id,name,access_token,tasks",
-            "access_token": token,
-        },
-        headers={"User-Agent": UA},
-        timeout=(10, 30),
-    )
-
-    if not response.ok:
-        fail(
-            "Facebook token cannot list Pages. "
-            f"/me/accounts returned HTTP {response.status_code}: "
-            f"{response.text[:700]}"
-        )
-
-    pages = response.json().get("data", [])
-    if not pages:
-        fail(
-            "This Facebook token has access to no Pages. "
-            "Generate a User Access Token from the Facebook account that "
-            "has access to the Page, then derive a Page Access Token."
-        )
-
-    # Exact configured Page match.
-    for page in pages:
-        page_id = str(page.get("id", ""))
-        if page_id == str(FACEBOOK_PAGE_ID):
-            page_token = (page.get("access_token") or "").strip()
-            if not page_token:
-                fail(
-                    f"Meta found {page.get('name', 'the Page')} ({page_id}) "
-                    "but did not return a Page Access Token."
-                )
-
-            tasks = page.get("tasks") or []
-            print(
-                f"Found configured Page: {page.get('name', 'unknown')} "
-                f"({page_id})."
-            )
-            print(
-                "Page tasks: "
-                + (", ".join(tasks) if tasks else "not returned")
-            )
-            return page_token
-
-    # Safe auto-detection when the token can access exactly one Page.
-    if len(pages) == 1:
-        page = pages[0]
-        page_id = str(page.get("id", ""))
-        page_token = (page.get("access_token") or "").strip()
-        page_name = page.get("name", "unknown")
-        tasks = page.get("tasks") or []
-
-        if not page_token:
-            fail(
-                f"Meta found {page_name} ({page_id}) but did not return "
-                "a Page Access Token."
-            )
-
-        print(
-            f"Configured Page ID did not match. Using the only Page visible "
-            f"to this token: {page_name} ({page_id})."
-        )
-        print(
-            "Page tasks: "
-            + (", ".join(tasks) if tasks else "not returned")
-        )
-
-        FACEBOOK_PAGE_ID = page_id
-        return page_token
-
-    visible = [
-        f"{p.get('name', 'unknown')} ({p.get('id', 'unknown')})"
-        for p in pages
+def _load_font(size: int, bold: bool = False):
+    candidates = [
+        "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf"
+        if bold
+        else "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
+        "/usr/share/fonts/truetype/liberation2/LiberationSans-Bold.ttf"
+        if bold
+        else "/usr/share/fonts/truetype/liberation2/LiberationSans-Regular.ttf",
     ]
-    fail(
-        "FACEBOOK_PAGE_ID does not match a Page visible to the token. "
-        "Visible Pages: " + "; ".join(visible)
+    for path in candidates:
+        if Path(path).exists():
+            return ImageFont.truetype(path, size)
+    return ImageFont.load_default()
+
+
+def wrap_text(draw, text: str, font, max_width: int) -> list[str]:
+    words = text.split()
+    lines = []
+    current = ""
+
+    for word in words:
+        test = word if not current else current + " " + word
+        if draw.textbbox((0, 0), test, font=font)[2] <= max_width:
+            current = test
+        else:
+            if current:
+                lines.append(current)
+            current = word
+
+    if current:
+        lines.append(current)
+
+    return lines
+
+
+def create_branded_image(title: str, source: str, published: str) -> bytes:
+    """Create a clean eFootball news card instead of using random/Google images."""
+    width, height = 1200, 675
+
+    image = Image.new("RGB", (width, height), (8, 24, 18))
+    draw = ImageDraw.Draw(image)
+
+    # Dynamic football-pitch background.
+    draw.rectangle((0, 390, width, height), fill=(10, 65, 38))
+    for x in range(-200, width + 200, 120):
+        draw.line((x, height, x + 260, 390), fill=(18, 94, 53), width=3)
+    for y in range(420, height, 55):
+        draw.line((0, y, width, y), fill=(18, 94, 53), width=2)
+
+    # Large abstract ball.
+    ball_x, ball_y, radius = 980, 135, 150
+    draw.ellipse(
+        (ball_x - radius, ball_y - radius, ball_x + radius, ball_y + radius),
+        outline=(230, 245, 238),
+        width=4,
     )
+    for angle in range(0, 360, 72):
+        import math
+        px = ball_x + int(radius * 0.72 * math.cos(math.radians(angle)))
+        py = ball_y + int(radius * 0.72 * math.sin(math.radians(angle)))
+        draw.line((ball_x, ball_y, px, py), fill=(230, 245, 238), width=3)
+
+    white = (245, 249, 247)
+    accent = (50, 220, 150)
+    muted = (185, 205, 195)
+
+    brand_font = _load_font(34, True)
+    label_font = _load_font(23, True)
+    title_font = _load_font(54, True)
+    small_font = _load_font(21, False)
+
+    draw.text(
+        (70, 48),
+        "TWO TAKES EFOOTBALL",
+        font=brand_font,
+        fill=white,
+    )
+    draw.text(
+        (70, 105),
+        "NEWS",
+        font=label_font,
+        fill=accent,
+    )
+
+    max_width = 780
+    title_lines = wrap_text(draw, title, title_font, max_width)
+
+    y = 170
+    for line in title_lines[:4]:
+        draw.text((70, y), line, font=title_font, fill=white)
+        y += 64
+
+    draw.text(
+        (70, 560),
+        f"{source or 'eFootball News'}  •  {published[:16]}",
+        font=small_font,
+        fill=muted,
+    )
+    draw.text(
+        (70, 610),
+        "eFootball updates • news • ratings • events",
+        font=label_font,
+        fill=white,
+    )
+
+    out = WORK_PATH / "efootball_news_card.jpg"
+    image.save(out, "JPEG", quality=92, optimize=True)
+    return out.read_bytes()
+
 
 
 def verify_page_publishing_access(access_token: str) -> None:
@@ -621,22 +630,25 @@ def main() -> None:
 
     stories = fetch_google_news(config["query"] + " eFootball")
     story = choose_story(stories, state)
-    caption = call_ai(story, config["name"])
-    if "efootball" not in caption.lower():
+    caption_data = call_ai(story, config["name"])
+    if "efootball" not in caption_data["caption"].lower():
         fail("Generated caption is not explicitly eFootball-specific.")
     page_access_token = resolve_page_access_token(FACEBOOK_PAGE_ACCESS_TOKEN)
     verify_page_publishing_access(page_access_token)
 
-    image_bytes, image_url = extract_og_image(story["link"])
-    if not image_bytes:
-        image_bytes, image_url = search_pexels("eFootball " + config["pexels"])
+    image_bytes = create_branded_image(
+        caption_data["title"],
+        story["source"],
+        story["pub_date"],
+    )
+    image_url = "generated://two-takes-efootball-news-card"
 
-    if image_bytes:
-        result = publish_photo(caption, image_bytes, page_access_token)
-        post_type = "photo"
-    else:
-        result = publish_text(caption, page_access_token)
-        post_type = "text"
+    result = publish_photo(
+        caption_data["caption"],
+        image_bytes,
+        page_access_token,
+    )
+    post_type = "photo"
 
     entry = {
         "posted_at": datetime.now(timezone.utc).isoformat(),
@@ -649,6 +661,30 @@ def main() -> None:
         "image_url": image_url,
         "caption": caption,
     }
+
+
+    # Remove the two legacy posts created by the broken version of this bot.
+    # Failures are logged but do not block the corrected post.
+    legacy_post_ids = [
+        "1397515220100650_122095343775487467",
+        "1397515220100650_122095346487487467",
+    ]
+    for legacy_id in legacy_post_ids:
+        try:
+            delete_response = requests.delete(
+                f"https://graph.facebook.com/{legacy_id}",
+                params={"access_token": page_access_token},
+                timeout=(10, 30),
+            )
+            if delete_response.ok:
+                print(f"Removed legacy Facebook post {legacy_id}.")
+            else:
+                print(
+                    f"Could not remove legacy Facebook post {legacy_id}: "
+                    f"HTTP {delete_response.status_code}"
+                )
+        except requests.RequestException as exc:
+            print(f"Legacy post cleanup failed for {legacy_id}: {exc}")
 
     state.setdefault("posted", []).append(entry)
     state["posted"] = state["posted"][-100:]
