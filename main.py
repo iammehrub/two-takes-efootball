@@ -312,10 +312,10 @@ def extract_og_image(article_url: str) -> tuple[bytes, str]:
 
         html = response.text[:2_000_000]
         patterns = [
-            r'<meta[^>]+property=["\\']og:image["\\'][^>]+content=["\\']([^"\\']+)["\\']',
-            r'<meta[^>]+content=["\\']([^"\\']+)["\\'][^>]+property=["\\']og:image["\\']',
-            r'<meta[^>]+name=["\\']twitter:image["\\'][^>]+content=["\\']([^"\\']+)["\\']',
-            r'<meta[^>]+content=["\\']([^"\\']+)["\\'][^>]+name=["\\']twitter:image["\\']',
+            r"<meta[^>]+property=[\"']og:image[\"'][^>]+content=[\"']([^\"']+)[\"']",
+            r"<meta[^>]+content=[\"']([^\"']+)[\"'][^>]+property=[\"']og:image[\"']",
+            r"<meta[^>]+name=[\"']twitter:image[\"'][^>]+content=[\"']([^\"']+)[\"']",
+            r"<meta[^>]+content=[\"']([^\"']+)[\"'][^>]+name=[\"']twitter:image[\"']",
         ]
 
         image_url = ""
@@ -347,6 +347,7 @@ def extract_og_image(article_url: str) -> tuple[bytes, str]:
         print(f"Article image extraction failed: {exc}")
 
     return b"", ""
+
 
 
 def search_pexels(query: str) -> tuple[bytes, str]:
