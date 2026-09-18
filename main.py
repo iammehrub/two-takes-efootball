@@ -272,7 +272,7 @@ def publish_photo(caption: str, image_bytes: bytes, access_token: str) -> dict:
     return result
 
 
-def publish_text(caption: str) -> dict:
+def publish_text(caption: str, access_token: str) -> dict:
     response = requests.post(
         f"https://graph.facebook.com/{FACEBOOK_PAGE_ID}/feed",
         data={
