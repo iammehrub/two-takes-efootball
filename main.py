@@ -250,7 +250,7 @@ def search_pexels(query: str) -> tuple[bytes, str]:
 
 
 def resolve_page_access_token(token: str) -> str:
-    """Resolve a usable Page Access Token and, when needed, auto-detect the Page."""
+    """Resolve a Page Access Token and validate its Page task from /me/accounts."""
     global FACEBOOK_PAGE_ID
 
     me = requests.get(
@@ -267,9 +267,9 @@ def resolve_page_access_token(token: str) -> str:
             f"{me_data.get('name', 'unknown')} ({me_data.get('id', 'unknown')})"
         )
 
-        # Already a Page token for the configured Page.
+        # If the supplied token itself is a Page token, use it directly.
         if str(me_data.get("id", "")) == str(FACEBOOK_PAGE_ID):
-            print("Configured FACEBOOK_PAGE_ID matches the Page token identity.")
+            print("Configured Page ID matches the supplied Page Access Token.")
             return token
 
     response = requests.get(
@@ -293,8 +293,8 @@ def resolve_page_access_token(token: str) -> str:
     if not pages:
         fail(
             "This Facebook token has access to no Pages through /me/accounts. "
-            "Generate the token from the Facebook account that has access to "
-            "the target Page and grant the required Page permissions."
+            "Generate it from the Facebook account that has access to the "
+            "target Page and grant the required Page permissions."
         )
 
     # Exact configured-page match.
@@ -302,48 +302,81 @@ def resolve_page_access_token(token: str) -> str:
         page_id = str(page.get("id", ""))
         if page_id == str(FACEBOOK_PAGE_ID):
             page_token = (page.get("access_token") or "").strip()
-            if page_token:
-                print(
-                    f"Found configured Page: {page.get('name', 'unknown')} "
-                    f"({page_id})."
-                )
-                return page_token
+            tasks = page.get("tasks") or []
 
-    # This token currently exposes exactly one Page, so safely use it.
-    # This avoids breaking the workflow when the Page-ID secret was entered
-    # incorrectly but the token has access to only one Page.
+            if not page_token:
+                fail(
+                    f"Meta found {page.get('name', 'the Page')} "
+                    f"({page_id}) but did not return a Page Access Token."
+                )
+
+            print(
+                f"Found configured Page: {page.get('name', 'unknown')} "
+                f"({page_id})."
+            )
+            print(
+                "Page tasks: "
+                + (", ".join(tasks) if tasks else "not returned")
+            )
+
+            if tasks and "CREATE_CONTENT" not in tasks:
+                fail(
+                    "The Facebook account can access this Page, but Meta did "
+                    "not grant the CREATE_CONTENT task to this token. "
+                    "Regenerate the User Access Token with pages_show_list, "
+                    "pages_read_engagement, and pages_manage_posts, then "
+                    "derive a fresh Page Access Token."
+                )
+
+            return page_token
+
+    # Safe auto-detection when the token can access exactly one Page.
     if len(pages) == 1:
         page = pages[0]
         page_id = str(page.get("id", ""))
         page_token = (page.get("access_token") or "").strip()
+        tasks = page.get("tasks") or []
         page_name = page.get("name", "unknown")
 
-        if page_id and page_token:
-            print(
-                f"Configured Page ID '{FACEBOOK_PAGE_ID}' did not match. "
-                f"Using the only Page visible to this token: "
-                f"{page_name} ({page_id})."
+        if not page_token:
+            fail(
+                f"Meta found {page_name} ({page_id}) but did not return "
+                "a Page Access Token."
             )
-            FACEBOOK_PAGE_ID = page_id
-            return page_token
+
+        print(
+            f"Configured Page ID did not match. Using the only Page visible "
+            f"to this token: {page_name} ({page_id})."
+        )
+        print(
+            "Page tasks: " + (", ".join(tasks) if tasks else "not returned")
+        )
+
+        if tasks and "CREATE_CONTENT" not in tasks:
+            fail(
+                "The only Page visible to this token does not have the "
+                "CREATE_CONTENT task."
+            )
+
+        FACEBOOK_PAGE_ID = page_id
+        return page_token
 
     visible = [
         f"{p.get('name', 'unknown')} ({p.get('id', 'unknown')})"
         for p in pages
     ]
     fail(
-        "FACEBOOK_PAGE_ID does not match any Page visible to the token, and "
-        "the token can access multiple Pages. Visible Pages: "
-        + "; ".join(visible)
-        + ". Set FACEBOOK_PAGE_ID to the target Page's numeric ID."
+        "FACEBOOK_PAGE_ID does not match a Page visible to the token. "
+        "Visible Pages: " + "; ".join(visible)
     )
 
+
 def verify_page_publishing_access(access_token: str) -> None:
-    """Check the Page token identity and tasks before attempting to publish."""
+    """Validate only the Page identity; task data comes from /me/accounts."""
     response = requests.get(
         f"https://graph.facebook.com/{FACEBOOK_PAGE_ID}",
         params={
-            "fields": "id,name,tasks",
+            "fields": "id,name",
             "access_token": access_token,
         },
         headers={"User-Agent": UA},
@@ -358,29 +391,14 @@ def verify_page_publishing_access(access_token: str) -> None:
 
     data = response.json()
     page_id = str(data.get("id", ""))
-    tasks = data.get("tasks") or []
     page_name = data.get("name", "unknown")
 
-    print(
-        f"Page token identity: {page_name} ({page_id}); "
-        f"tasks: {', '.join(tasks) if tasks else 'not returned'}"
-    )
+    print(f"Page token identity check: {page_name} ({page_id})")
 
     if page_id != str(FACEBOOK_PAGE_ID):
         fail(
-            "Resolved Page Access Token belongs to a different Page: "
-            f"{page_id}, expected {FACEBOOK_PAGE_ID}."
-        )
-
-    # Meta's Page task model uses CREATE_CONTENT for publishing content.
-    # Some API responses may omit tasks, so absence is diagnostic rather than
-    # an automatic failure; the publish call remains the final authority.
-    if tasks and "CREATE_CONTENT" not in tasks:
-        fail(
-            "The Page Access Token is valid for this Page but does not have "
-            "the CREATE_CONTENT task. Regenerate the Page token from the "
-            "Facebook account that has content-creation access to this Page, "
-            "with the app's Page-management permissions enabled."
+            f"Resolved Page Access Token belongs to {page_id}, "
+            f"expected {FACEBOOK_PAGE_ID}."
         )
 
 
