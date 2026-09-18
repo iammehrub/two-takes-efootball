@@ -1,6 +1,8 @@
 name: Two Takes EFootball
 
 on:
+  push:
+    branches: ["main"]
   workflow_dispatch:
     inputs:
       slot:
@@ -32,6 +34,7 @@ concurrency:
 
 jobs:
   post:
+    if: github.event_name != 'push' || contains(github.event.head_commit.message, '[RUN_NOW]')
     runs-on: ubuntu-latest
 
     steps:
@@ -50,6 +53,11 @@ jobs:
         run: |
           if [ "$EVENT_NAME" = "workflow_dispatch" ]; then
             echo "slot=$INPUT_SLOT" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          if [ "$EVENT_NAME" = "push" ]; then
+            echo "slot=1" >> "$GITHUB_OUTPUT"
             exit 0
           fi
 
