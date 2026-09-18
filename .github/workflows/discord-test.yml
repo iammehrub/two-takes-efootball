@@ -15,14 +15,11 @@ jobs:
           python-version: "3.12"
       - name: Install dependencies
         run: python -m pip install -r requirements.txt
-      - name: Send Discord test messages
+      - name: Send Facebook Discord test messages
         env:
           DISCORD_FACEBOOK_WEBHOOK: ${{ secrets.DISCORD_FACEBOOK_WEBHOOK }}
           DISCORD_FACEBOOK_ANALYTICS_WEBHOOK: ${{ secrets.DISCORD_FACEBOOK_ANALYTICS_WEBHOOK }}
-          DISCORD_BD_NEWS_WEBHOOK: ${{ secrets.DISCORD_BD_NEWS_WEBHOOK }}
           DISCORD_ALERTS_WEBHOOK: ${{ secrets.DISCORD_ALERTS_WEBHOOK }}
-          DISCORD_YOUTUBE_PODCAST_WEBHOOK: ${{ secrets.DISCORD_YOUTUBE_PODCAST_WEBHOOK }}
-          DISCORD_YOUTUBE_SHORTS_WEBHOOK: ${{ secrets.DISCORD_YOUTUBE_SHORTS_WEBHOOK }}
         run: |
           python - <<'PY'
           import os
@@ -31,10 +28,7 @@ jobs:
           tests = [
               ("DISCORD_FACEBOOK_WEBHOOK", "⚽・two-takes-efootball", "Facebook webhook connection works."),
               ("DISCORD_FACEBOOK_ANALYTICS_WEBHOOK", "📊・facebook-analytics", "Analytics webhook connection works."),
-              ("DISCORD_BD_NEWS_WEBHOOK", "🔴・bangladesh-news", "Bangladesh news webhook connection works."),
               ("DISCORD_ALERTS_WEBHOOK", "🚨・system-alerts", "Alerts webhook connection works."),
-              ("DISCORD_YOUTUBE_PODCAST_WEBHOOK", "🎙️・two-takes-podcast", "YouTube podcast webhook connection works."),
-              ("DISCORD_YOUTUBE_SHORTS_WEBHOOK", "📱・two-takes-shorts", "YouTube shorts webhook connection works."),
           ]
 
           failures = 0
@@ -45,14 +39,14 @@ jobs:
                   continue
               ok = send_webhook(
                   env_name,
-                  "✅ Discord Connection Test",
+                  "✅ Facebook Discord Connection Test",
                   message,
                   fields=[("Channel", channel, True)],
-                  footer="Two Takes Automation • Test",
+                  footer="Two Takes EFootball • Test",
               )
               print(("PASS " if ok else "FAIL ") + channel)
               failures += 0 if ok else 1
 
           if failures:
-              raise SystemExit(f"{failures} Discord connection test(s) failed or are not configured.")
+              raise SystemExit(f"{failures} Facebook Discord connection test(s) failed or are not configured.")
           PY
