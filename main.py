@@ -250,35 +250,28 @@ def search_pexels(query: str) -> tuple[bytes, str]:
 
 
 def resolve_page_access_token(token: str) -> str:
-    """Resolve and validate the Page token without ever publishing with a User token."""
-    # First determine what identity the supplied token represents.
+    """Resolve a usable Page Access Token and, when needed, auto-detect the Page."""
+    global FACEBOOK_PAGE_ID
+
     me = requests.get(
         "https://graph.facebook.com/me",
-        params={
-            "fields": "id,name",
-            "access_token": token,
-        },
+        params={"fields": "id,name", "access_token": token},
         headers={"User-Agent": UA},
         timeout=30,
     )
 
     if me.ok:
         me_data = me.json()
-        me_id = str(me_data.get("id", ""))
-        me_name = me_data.get("name", "")
-        print(f"Facebook token identity: {me_name or 'unknown'} ({me_id or 'unknown'})")
-
-        # A Page token can be used directly when it belongs to this Page.
-        if me_id == str(FACEBOOK_PAGE_ID):
-            print("Configured FACEBOOK_PAGE_ID matches the token's Page identity.")
-            return token
-    else:
         print(
-            f"Could not inspect Facebook token identity: "
-            f"HTTP {me.status_code}: {me.text[:300]}"
+            f"Facebook token identity: "
+            f"{me_data.get('name', 'unknown')} ({me_data.get('id', 'unknown')})"
         )
 
-    # A User Access Token should expose the Pages the user can manage.
+        # Already a Page token for the configured Page.
+        if str(me_data.get("id", "")) == str(FACEBOOK_PAGE_ID):
+            print("Configured FACEBOOK_PAGE_ID matches the Page token identity.")
+            return token
+
     response = requests.get(
         "https://graph.facebook.com/me/accounts",
         params={
@@ -300,31 +293,49 @@ def resolve_page_access_token(token: str) -> str:
     if not pages:
         fail(
             "This Facebook token has access to no Pages through /me/accounts. "
-            "Generate the token from the same Facebook account that has Page "
-            "access, and grant the required Page permissions."
+            "Generate the token from the Facebook account that has access to "
+            "the target Page and grant the required Page permissions."
         )
 
-    visible = []
+    # Exact configured-page match.
     for page in pages:
         page_id = str(page.get("id", ""))
-        page_name = page.get("name", "")
-        tasks = page.get("tasks") or []
-        visible.append(f"{page_name} ({page_id})")
         if page_id == str(FACEBOOK_PAGE_ID):
             page_token = (page.get("access_token") or "").strip()
             if page_token:
                 print(
-                    f"Found configured Page: {page_name} ({page_id}). "
-                    f"Tasks: {', '.join(tasks) if tasks else 'not returned'}"
+                    f"Found configured Page: {page.get('name', 'unknown')} "
+                    f"({page_id})."
                 )
                 return page_token
 
+    # This token currently exposes exactly one Page, so safely use it.
+    # This avoids breaking the workflow when the Page-ID secret was entered
+    # incorrectly but the token has access to only one Page.
+    if len(pages) == 1:
+        page = pages[0]
+        page_id = str(page.get("id", ""))
+        page_token = (page.get("access_token") or "").strip()
+        page_name = page.get("name", "unknown")
+
+        if page_id and page_token:
+            print(
+                f"Configured Page ID '{FACEBOOK_PAGE_ID}' did not match. "
+                f"Using the only Page visible to this token: "
+                f"{page_name} ({page_id})."
+            )
+            FACEBOOK_PAGE_ID = page_id
+            return page_token
+
+    visible = [
+        f"{p.get('name', 'unknown')} ({p.get('id', 'unknown')})"
+        for p in pages
+    ]
     fail(
-        "FACEBOOK_PAGE_ID does not match any Page visible to the Facebook token. "
-        "Pages visible to this token: "
+        "FACEBOOK_PAGE_ID does not match any Page visible to the token, and "
+        "the token can access multiple Pages. Visible Pages: "
         + "; ".join(visible)
-        + ". Check FACEBOOK_PAGE_ID. It must be the Page's numeric ID, not "
-        "the Page username, handle, or profile URL."
+        + ". Set FACEBOOK_PAGE_ID to the target Page's numeric ID."
     )
 
 def publish_photo(caption: str, image_bytes: bytes, access_token: str) -> dict:
