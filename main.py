@@ -424,7 +424,7 @@ Use ONLY information supported by the supplied source.
 Do not invent dates, player ratings, rewards, events, packs, odds, or quotes.
 Do not turn real-world football news into eFootball news.
 
-Write:
+Write exactly:
 TITLE: one short, specific eFootball headline
 
 <body of 45-80 words>
@@ -472,10 +472,11 @@ URL:
         "X-Title": "Two Takes EFootball",
     }
 
-    last_error = ""
     models = [OPENROUTER_MODEL]
     if "openrouter/free" not in models:
         models.append("openrouter/free")
+
+    last_error = ""
 
     for model in models:
         payload["model"] = model
@@ -497,7 +498,8 @@ URL:
                 if attempt < 3:
                     delay = min(12, 2 ** attempt) + random.random()
                     print(
-                        f"OpenRouter {model} network error; retrying in {delay:.1f}s..."
+                        f"OpenRouter {model} network error; "
+                        f"retrying in {delay:.1f}s..."
                     )
                     time.sleep(delay)
                     continue
@@ -505,40 +507,44 @@ URL:
                 break
 
             if response.ok:
-            try:
-                data = response.json()
-            except ValueError:
-                last_error = "OpenRouter returned invalid JSON."
-                break
+                try:
+                    data = response.json()
+                except ValueError:
+                    last_error = f"{model}: invalid JSON response."
+                    break
 
-            choices = data.get("choices") or []
+                choices = data.get("choices") or []
 
-            if choices:
-                message = choices[0].get("message") or {}
-                content = _clean_ai_text(message.get("content"))
+                if choices:
+                    message = choices[0].get("message") or {}
+                    content = _clean_ai_text(message.get("content"))
 
-                if not content:
-                    content = _clean_ai_text(
-                        choices[0].get("text")
-                    )
+                    if not content:
+                        content = _clean_ai_text(
+                            choices[0].get("text")
+                        )
 
-                parsed = parse_generated_post(content, story)
+                    if content:
+                        parsed = parse_generated_post(
+                            content,
+                            story,
+                        )
+                        print(
+                            f"Caption generated with OpenRouter model {model}."
+                        )
+                        return parsed
 
-                if content:
-                    print(
-                        "Caption generated with OpenRouter model "
-                        f"{OPENROUTER_MODEL}."
+                    finish_reason = choices[0].get("finish_reason")
+                    last_error = (
+                        f"{model}: no final text "
+                        f"(finish_reason={finish_reason})."
                     )
                 else:
-                    print(
-                        "OpenRouter returned no final text; using a "
-                        "source-based fallback caption."
-                    )
+                    last_error = f"{model}: no choices returned."
 
-                return parsed
-
-            last_error = f"OpenRouter returned no choices: {data}"
-            break
+                # A successful HTTP response with no usable text is not
+                # transient enough to keep hammering the same model.
+                break
 
             last_error = (
                 f"{model}: HTTP {response.status_code}: "
@@ -549,8 +555,9 @@ URL:
                 if attempt < 3:
                     delay = min(12, 2 ** attempt) + random.random()
                     print(
-                        f"OpenRouter {model} returned {response.status_code}; "
-                        f"retrying in {delay:.1f}s..."
+                        f"OpenRouter {model} returned "
+                        f"{response.status_code}; retrying in "
+                        f"{delay:.1f}s..."
                     )
                     time.sleep(delay)
                     continue
@@ -558,14 +565,16 @@ URL:
             break
 
         print(
-            f"Model {model} failed or returned no usable caption; trying next model."
+            f"Model {model} did not produce a usable caption; "
+            "trying the next option."
         )
 
     print(
-        "OpenRouter failed; using a deterministic source-based caption. "
-        f"Last error: {last_error}"
+        "OpenRouter unavailable for final text; using deterministic "
+        f"source-based caption. Last error: {last_error}"
     )
     return deterministic_post(story)
+
 
 
 def resolve_page_access_token(token: str) -> str:
