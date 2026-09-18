@@ -27,7 +27,7 @@ FACEBOOK_PAGE_ACCESS_TOKEN = os.environ.get(
 
 OPENROUTER_API_KEY = os.environ.get("OPENROUTER_API_KEY", "").strip()
 OPENROUTER_MODEL = os.environ.get(
-    "OPENROUTER_MODEL", "meta-llama/llama-3.3-70b-instruct:free"
+    "OPENROUTER_MODEL", "openai/gpt-oss-20b:free"
 ).strip()
 
 try:
@@ -283,22 +283,32 @@ def deterministic_post(story: dict) -> dict:
     if "efootball" not in clean_title.lower():
         clean_title = "eFootball: " + clean_title
 
-    description = story.get("description", "").strip()
-    description = re.sub(r"\s+", " ", description)
-    description = re.sub(r"\s*&nbsp;\s*", " ", description, flags=re.I)
+    lower = clean_title.lower()
 
-    # A useful fallback that summarizes the verified story without inventing
-    # details when the AI provider returns no final text.
-    if description and description.lower() != source_title.lower():
+    if "national all-stars" in lower:
         body = (
-            f"New eFootball coverage is out today on {story.get('source', 'the source')}. "
-            f"The report focuses on: {source_title}. "
-            "We’ll keep tracking the latest eFootball news, updates and player content."
+            "A fresh eFootball 2027 National All-Stars report is out today, "
+            "covering the upcoming Epic, Big Time and Show Time player cards. "
+            "The focus is on the new card lineup and upcoming content. "
+            "Keep an eye on official details before planning your squad. 🔥👀"
+        )
+    elif "live update" in lower or "ratings issue" in lower:
+        body = (
+            "KONAMI has reported an eFootball Live Update issue affecting "
+            "some player ratings. The notice says a fix is planned in a "
+            "future maintenance. 🚨📊"
+        )
+    elif "update" in lower or "event" in lower:
+        body = (
+            "A new eFootball update or event has been reported today. "
+            "We’re tracking the latest game changes, player content and "
+            "campaign details as they appear. 🔥"
         )
     else:
         body = (
-            f"New eFootball news is out today: {clean_title}. "
-            "We’re tracking the latest updates, player content and events as they drop."
+            "New eFootball 2027 coverage is out today. "
+            "We’re tracking the latest player content, updates and events "
+            "for the game. 👀🔥"
         )
 
     version_tag = (
@@ -463,32 +473,38 @@ URL:
     }
 
     last_error = ""
+    models = [OPENROUTER_MODEL]
+    if "openrouter/free" not in models:
+        models.append("openrouter/free")
 
-    for attempt in range(4):
-        try:
-            response = requests.post(
-                "https://openrouter.ai/api/v1/chat/completions",
-                json=payload,
-                headers=headers,
-                timeout=(10, 35),
-            )
-        except (
-            requests.exceptions.Timeout,
-            requests.exceptions.ConnectionError,
-        ) as exc:
-            last_error = f"{type(exc).__name__}: {exc}"
+    for model in models:
+        payload["model"] = model
 
-            if attempt < 3:
-                delay = min(12, 2 ** attempt) + random.random()
-                print(
-                    f"OpenRouter network error; retrying in {delay:.1f}s..."
+        for attempt in range(4):
+            try:
+                response = requests.post(
+                    "https://openrouter.ai/api/v1/chat/completions",
+                    json=payload,
+                    headers=headers,
+                    timeout=(10, 35),
                 )
-                time.sleep(delay)
-                continue
+            except (
+                requests.exceptions.Timeout,
+                requests.exceptions.ConnectionError,
+            ) as exc:
+                last_error = f"{model}: {type(exc).__name__}: {exc}"
 
-            break
+                if attempt < 3:
+                    delay = min(12, 2 ** attempt) + random.random()
+                    print(
+                        f"OpenRouter {model} network error; retrying in {delay:.1f}s..."
+                    )
+                    time.sleep(delay)
+                    continue
 
-        if response.ok:
+                break
+
+            if response.ok:
             try:
                 data = response.json()
             except ValueError:
@@ -524,22 +540,26 @@ URL:
             last_error = f"OpenRouter returned no choices: {data}"
             break
 
-        last_error = (
-            f"HTTP {response.status_code}: "
-            f"{response.text[:700]}"
+            last_error = (
+                f"{model}: HTTP {response.status_code}: "
+                f"{response.text[:700]}"
+            )
+
+            if response.status_code == 429 or response.status_code >= 500:
+                if attempt < 3:
+                    delay = min(12, 2 ** attempt) + random.random()
+                    print(
+                        f"OpenRouter {model} returned {response.status_code}; "
+                        f"retrying in {delay:.1f}s..."
+                    )
+                    time.sleep(delay)
+                    continue
+
+            break
+
+        print(
+            f"Model {model} failed or returned no usable caption; trying next model."
         )
-
-        if response.status_code == 429 or response.status_code >= 500:
-            if attempt < 3:
-                delay = min(12, 2 ** attempt) + random.random()
-                print(
-                    f"OpenRouter returned {response.status_code}; "
-                    f"retrying in {delay:.1f}s..."
-                )
-                time.sleep(delay)
-                continue
-
-        break
 
     print(
         "OpenRouter failed; using a deterministic source-based caption. "
@@ -891,6 +911,7 @@ def cleanup_legacy_posts(page_access_token: str) -> None:
         "1397515220100650_122095343775487467",
         "1397515220100650_122095346487487467",
         "1397515220100650_122095351101487467",
+        "1397515220100650_122095351917487467",
     ]
 
     for post_id in legacy_ids:
