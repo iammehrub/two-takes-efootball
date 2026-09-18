@@ -397,6 +397,93 @@ def search_pexels(query: str) -> tuple[bytes, str]:
 
     return b"", ""
 
+def resolve_page_access_token(token: str) -> str:
+    """Resolve the Page Access Token for FACEBOOK_PAGE_ID."""
+    global FACEBOOK_PAGE_ID
+
+    response = requests.get(
+        "https://graph.facebook.com/me/accounts",
+        params={
+            "fields": "id,name,access_token,tasks",
+            "access_token": token,
+        },
+        headers={"User-Agent": UA},
+        timeout=(10, 30),
+    )
+
+    if not response.ok:
+        fail(
+            "Facebook token cannot list Pages. "
+            f"/me/accounts returned HTTP {response.status_code}: "
+            f"{response.text[:700]}"
+        )
+
+    pages = response.json().get("data", [])
+    if not pages:
+        fail(
+            "This Facebook token has access to no Pages. "
+            "Generate a User Access Token from the Facebook account that "
+            "has access to the Page, then derive a Page Access Token."
+        )
+
+    # Exact configured Page match.
+    for page in pages:
+        page_id = str(page.get("id", ""))
+        if page_id == str(FACEBOOK_PAGE_ID):
+            page_token = (page.get("access_token") or "").strip()
+            if not page_token:
+                fail(
+                    f"Meta found {page.get('name', 'the Page')} ({page_id}) "
+                    "but did not return a Page Access Token."
+                )
+
+            tasks = page.get("tasks") or []
+            print(
+                f"Found configured Page: {page.get('name', 'unknown')} "
+                f"({page_id})."
+            )
+            print(
+                "Page tasks: "
+                + (", ".join(tasks) if tasks else "not returned")
+            )
+            return page_token
+
+    # Safe auto-detection when the token can access exactly one Page.
+    if len(pages) == 1:
+        page = pages[0]
+        page_id = str(page.get("id", ""))
+        page_token = (page.get("access_token") or "").strip()
+        page_name = page.get("name", "unknown")
+        tasks = page.get("tasks") or []
+
+        if not page_token:
+            fail(
+                f"Meta found {page_name} ({page_id}) but did not return "
+                "a Page Access Token."
+            )
+
+        print(
+            f"Configured Page ID did not match. Using the only Page visible "
+            f"to this token: {page_name} ({page_id})."
+        )
+        print(
+            "Page tasks: "
+            + (", ".join(tasks) if tasks else "not returned")
+        )
+
+        FACEBOOK_PAGE_ID = page_id
+        return page_token
+
+    visible = [
+        f"{p.get('name', 'unknown')} ({p.get('id', 'unknown')})"
+        for p in pages
+    ]
+    fail(
+        "FACEBOOK_PAGE_ID does not match a Page visible to the token. "
+        "Visible Pages: " + "; ".join(visible)
+    )
+
+
 def verify_page_publishing_access(access_token: str) -> None:
     """Validate only the Page identity; task data comes from /me/accounts."""
     response = requests.get(
