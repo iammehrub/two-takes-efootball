@@ -20,7 +20,7 @@ FACEBOOK_PAGE_ID = os.environ.get("FACEBOOK_PAGE_ID", "").strip()
 FACEBOOK_PAGE_ACCESS_TOKEN = os.environ.get("FACEBOOK_PAGE_ACCESS_TOKEN", "").strip()
 GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY", "").strip() or os.environ.get("GEMINI", "").strip()
 PEXELS_API_KEY = os.environ.get("PEXELS_API_KEY", "").strip() or os.environ.get("PEXELS", "").strip()
-GEMINI_MODEL = os.environ.get("GEMINI_MODEL", "gemini-2.5-flash").strip()
+GEMINI_MODEL = os.environ.get("GEMINI_MODEL", "gemini-3.1-flash-lite").strip()
 
 try:
     SLOT = int(os.environ.get("POST_SLOT", "1"))
@@ -110,11 +110,7 @@ def choose_story(items: list[dict], state: dict) -> dict:
 
 
 def call_gemini(story: dict, slot_name: str) -> str:
-    endpoint = (
-        f"https://generativelanguage.googleapis.com/v1beta/models/"
-        f"{GEMINI_MODEL}:generateContent?key={GEMINI_API_KEY}"
-    )
-
+    """Generate the caption with transient-error retries and model fallback."""
     prompt = f"""
 You write social posts for an eFootball Facebook page called "Two Takes EFootball".
 
@@ -144,34 +140,79 @@ Summary: {story["description"]}
 URL: {story["link"]}
 """.strip()
 
-    payload = {
-        "contents": [{"parts": [{"text": prompt}]}],
-        "generationConfig": {
-            "temperature": 0.6,
-            "maxOutputTokens": 280,
-        },
-    }
+    models = []
+    for model in (
+        GEMINI_MODEL,
+        "gemini-3.1-flash-lite",
+        "gemini-3.5-flash-lite",
+        "gemini-2.5-flash-lite",
+    ):
+        if model and model not in models:
+            models.append(model)
 
-    response = requests.post(
-        endpoint,
-        json=payload,
-        headers={"Content-Type": "application/json"},
-        timeout=40,
-    )
-    if response.status_code >= 400:
-        fail(f"Gemini API error {response.status_code}: {response.text[:500]}")
+    last_error = ""
+    for model in models:
+        endpoint = (
+            "https://generativelanguage.googleapis.com/v1beta/models/"
+            f"{model}:generateContent?key={GEMINI_API_KEY}"
+        )
+        payload = {
+            "contents": [{"parts": [{"text": prompt}]}],
+            "generationConfig": {
+                "maxOutputTokens": 280,
+            },
+        }
 
-    data = response.json()
-    candidates = data.get("candidates", [])
-    if not candidates:
-        fail(f"Gemini returned no candidates: {data}")
+        for attempt in range(4):
+            response = requests.post(
+                endpoint,
+                json=payload,
+                headers={"Content-Type": "application/json"},
+                timeout=50,
+            )
 
-    parts = candidates[0].get("content", {}).get("parts", [])
-    text = "\n".join(p.get("text", "") for p in parts).strip()
-    if not text:
-        fail(f"Gemini returned no text: {data}")
-    return text
+            if response.ok:
+                data = response.json()
+                candidates = data.get("candidates", [])
+                if not candidates:
+                    last_error = f"{model}: no candidates returned: {data}"
+                    break
 
+                parts = candidates[0].get("content", {}).get("parts", [])
+                generated = "\n".join(
+                    p.get("text", "") for p in parts
+                ).strip()
+
+                if generated:
+                    print(f"Gemini caption generated with {model}.")
+                    return generated
+
+                last_error = f"{model}: empty response: {data}"
+                break
+
+            last_error = (
+                f"{model}: HTTP {response.status_code}: "
+                f"{response.text[:500]}"
+            )
+
+            # 429/5xx are transient candidates. Retry with exponential backoff.
+            if response.status_code == 429 or response.status_code >= 500:
+                if attempt < 3:
+                    delay = min(20, 2 ** attempt) + random.random()
+                    print(
+                        f"Gemini {model} returned {response.status_code}; "
+                        f"retrying in {delay:.1f}s..."
+                    )
+                    import time
+                    time.sleep(delay)
+                    continue
+
+            # 400/401/403/404 and other client errors should move to fallback.
+            break
+
+        print(f"Trying next Gemini model after failure: {last_error}")
+
+    fail(f"All Gemini models failed. Last error: {last_error}")
 
 def search_pexels(query: str) -> tuple[bytes, str]:
     response = requests.get(
