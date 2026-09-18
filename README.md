@@ -7,9 +7,10 @@ Automated Facebook Page posting for Two Takes EFootball.
 - Publishes 4 posts per day.
 - Uses Google News RSS to find fresh eFootball-related stories.
 - Uses OpenRouter's free-model router to turn the source into an English/Banglish Facebook caption.
-- Uses Pexels for a landscape football image when available.
+- Generates a branded 1200×675 image locally with Pillow.
 - Publishes the image + caption to the Facebook Page through the Graph API.
-- Keeps a small posting history to reduce duplicate stories.
+- Keeps posting history in `data/state.json` to reduce duplicate stories.
+- Refuses to publish when no suitable fresh story is found.
 
 ## GitHub Secrets
 
@@ -18,7 +19,6 @@ Create these repository secrets under Settings → Secrets and variables → Act
 - FACEBOOK_PAGE_ACCESS_TOKEN
 - FACEBOOK_PAGE_ID
 - OPENROUTER_API_KEY
-- PEXELS_API_KEY
 
 ## Schedule
 
@@ -30,6 +30,8 @@ GitHub scheduled workflows can be delayed under load, so the exact posting minut
 
 Open Actions → Two Takes EFootball → Run workflow and select a post slot.
 
-## AI provider
+## Production safety
 
-The caption generator uses OpenRouter's `openrouter/free` router by default. OpenRouter currently lists free API access with 25+ free models and a 50-request/day Free-plan limit.
+- There is no push trigger, so editing the repository does not automatically publish a Facebook post.
+- Legacy Facebook post deletion is not part of the normal posting workflow.
+- The bot validates the selected story and generated caption before publishing.
