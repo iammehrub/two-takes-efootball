@@ -76,29 +76,58 @@ def fetch_metrics(post_id: str, token: str) -> dict:
 
 
 def resolve_page_access_token(token: str, page_id: str) -> str:
+    """Accept a Page token directly; otherwise derive one from a User token."""
+    if not token:
+        raise RuntimeError("Missing FACEBOOK_PAGE_ACCESS_TOKEN.")
+
+    # Preferred path: the configured secret is already a Page token.
+    page_check = requests.get(
+        f"https://graph.facebook.com/{page_id}",
+        params={"fields": "id,name", "access_token": token},
+        timeout=(10, 30),
+    )
+    if page_check.ok:
+        data = page_check.json()
+        if str(data.get("id", "")) == str(page_id):
+            print(
+                f"Using supplied Page Access Token for "
+                f"{data.get('name', 'unknown')} ({page_id})."
+            )
+            return token
+
+    # Backward-compatible path: a User token can be used to resolve the
+    # Page token through /me/accounts.
     response = requests.get(
         "https://graph.facebook.com/me/accounts",
         params={
-            "fields": "id,name,access_token",
+            "fields": "id,name,access_token,tasks",
             "access_token": token,
         },
         timeout=(10, 30),
     )
     if not response.ok:
         raise RuntimeError(
-            f"Could not resolve Facebook Page token: HTTP {response.status_code}: {response.text[:700]}"
+            "Facebook token is neither a usable Page token nor a User token "
+            f"that can list Pages. HTTP {response.status_code}: "
+            f"{response.text[:700]}"
         )
+
     pages = response.json().get("data", [])
     for page in pages:
-        if str(page.get("id", "")) == str(page_id):
-            page_token = str(page.get("access_token", "")).strip()
-            if page_token:
-                return page_token
+        if str(page.get("id", "")) != str(page_id):
+            continue
+        page_token = str(page.get("access_token", "")).strip()
+        if page_token:
+            return page_token
+
     if len(pages) == 1:
         page_token = str(pages[0].get("access_token", "")).strip()
         if page_token:
             return page_token
-    return token
+
+    raise RuntimeError(
+        f"Facebook Page {page_id} was not returned by this User token."
+    )
 
 
 def fetch_recent_page_posts(page_id: str, token: str) -> list[dict]:
