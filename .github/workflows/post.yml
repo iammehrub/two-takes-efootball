@@ -1,11 +1,6 @@
 name: Two Takes EFootball
 
 on:
-  push:
-    branches:
-      - main
-    paths:
-      - ".github/workflows/post.yml"
   workflow_dispatch:
     inputs:
       slot:
