@@ -533,7 +533,7 @@ URL:
             }
         ],
         "temperature": 0.3,
-        "max_tokens": 420,
+        "max_tokens": 700,
     }
 
     headers = {
