@@ -37,7 +37,7 @@ jobs:
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
         with:
           fetch-depth: 1
 
@@ -63,7 +63,7 @@ jobs:
           esac
 
       - name: Set up Python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v6
         with:
           python-version: "3.12"
 
@@ -75,7 +75,7 @@ jobs:
           FACEBOOK_PAGE_ACCESS_TOKEN: ${{ secrets.FACEBOOK_PAGE_ACCESS_TOKEN }}
           FACEBOOK_PAGE_ID: ${{ secrets.FACEBOOK_PAGE_ID }}
           OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
-          OPENROUTER_MODEL: ${{ vars.OPENROUTER_MODEL || 'openai/gpt-oss-20b:free' }}
+          OPENROUTER_MODEL: ${{ vars.OPENROUTER_MODEL || 'openrouter/free' }}
           POST_SLOT: ${{ steps.slot.outputs.slot }}
           DISCORD_FACEBOOK_WEBHOOK: ${{ secrets.DISCORD_FACEBOOK_WEBHOOK }}
           DISCORD_ALERTS_WEBHOOK: ${{ secrets.DISCORD_ALERTS_WEBHOOK }}
@@ -92,4 +92,14 @@ jobs:
             exit 0
           fi
           git commit -m "Update posting history"
-          git push
+          # The posting itself already succeeded. Rebase once in case another
+          # GitHub Actions job or manual change updated main meanwhile.
+          for attempt in 1 2 3; do
+            if git push; then
+              exit 0
+            fi
+            echo "Push attempt $attempt failed; rebasing onto latest main..."
+            git pull --rebase origin main
+          done
+          echo "State commit could not be pushed after 3 attempts; the Facebook post was already published."
+          exit 0
