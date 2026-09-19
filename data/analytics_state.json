@@ -1,4 +1,23 @@
 {
-  "processed": [],
-  "history": []
+  "processed": [
+    "1397515220100650_122095358319487467"
+  ],
+  "history": [
+    {
+      "analyzed_at": "2026-09-19T05:16:47.050292+00:00",
+      "age_hours": 15.48,
+      "post_id": "1397515220100650_122095358319487467",
+      "facebook_url": "https://www.facebook.com/1397515220100650_122095358319487467",
+      "title": "eFootball 2027: International Match Campaign Brings Free Chance Deals",
+      "slot": "?",
+      "reactions": null,
+      "comments": null,
+      "shares": 0,
+      "visible_interactions": null,
+      "metrics_limited": true,
+      "baseline": null,
+      "delta_percent": null,
+      "summary": "At about 15.5 hours, Facebook returned 0 shares. Reaction and comment counts are unavailable for the current app permissions, so this is a limited engagement snapshot. This is an engagement snapshot, not a reach/impressions measurement."
+    }
+  ]
 }
