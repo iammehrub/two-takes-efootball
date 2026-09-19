@@ -1,6 +1,9 @@
 name: Facebook 12-Hour Analytics
 
 on:
+  push:
+    branches:
+      - automation-live-test-fb-analytics
   workflow_dispatch:
   schedule:
     - cron: "45 * * * *"
