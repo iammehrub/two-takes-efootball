@@ -50,29 +50,67 @@ def count_summary(node) -> int:
 
 
 def fetch_metrics(post_id: str, token: str) -> dict:
-    fields = "reactions.limit(0).summary(true),comments.limit(0).summary(true),shares"
+    full_fields = "reactions.limit(0).summary(true),comments.limit(0).summary(true),shares"
     response = requests.get(
         f"https://graph.facebook.com/{post_id}",
-        params={"fields": fields, "access_token": token},
+        params={"fields": full_fields, "access_token": token},
         timeout=(10, 30),
     )
-    if not response.ok:
-        raise RuntimeError(f"Facebook metrics HTTP {response.status_code}: {response.text[:700]}")
-    data = response.json()
-    reactions = count_summary(data.get("reactions"))
-    comments = count_summary(data.get("comments"))
-    shares_node = data.get("shares") or {}
-    try:
-        shares = int(shares_node.get("count", 0) or 0)
-    except (TypeError, ValueError):
-        shares = 0
-    return {
-        "reactions": reactions,
-        "comments": comments,
-        "shares": shares,
-        "visible_interactions": reactions + comments + shares,
-    }
 
+    if response.ok:
+        data = response.json()
+        reactions = count_summary(data.get("reactions"))
+        comments = count_summary(data.get("comments"))
+        shares_node = data.get("shares") or {}
+        try:
+            shares = int(shares_node.get("count", 0) or 0)
+        except (TypeError, ValueError):
+            shares = 0
+        return {
+            "reactions": reactions,
+            "comments": comments,
+            "shares": shares,
+            "visible_interactions": reactions + comments + shares,
+            "metrics_limited": False,
+        }
+
+    # Meta may block reaction/comment reads unless the app has
+    # pages_read_user_content or Page Public Content Access. Keep analytics
+    # useful and stop error spam by falling back to shares, which this
+    # Page-token flow can still expose.
+    try:
+        error_body = response.json().get("error", {})
+    except ValueError:
+        error_body = {}
+
+    if response.status_code == 400 and str(error_body.get("code")) == "10":
+        shares_response = requests.get(
+            f"https://graph.facebook.com/{post_id}",
+            params={"fields": "shares", "access_token": token},
+            timeout=(10, 30),
+        )
+        if shares_response.ok:
+            data = shares_response.json()
+            shares_node = data.get("shares") or {}
+            try:
+                shares = int(shares_node.get("count", 0) or 0)
+            except (TypeError, ValueError):
+                shares = 0
+            print(
+                f"Facebook reaction/comment metrics unavailable for {post_id}; "
+                "falling back to shares-only analytics."
+            )
+            return {
+                "reactions": None,
+                "comments": None,
+                "shares": shares,
+                "visible_interactions": None,
+                "metrics_limited": True,
+            }
+
+    raise RuntimeError(
+        f"Facebook metrics HTTP {response.status_code}: {response.text[:700]}"
+    )
 
 
 def resolve_page_access_token(token: str, page_id: str) -> str:
@@ -160,11 +198,18 @@ def fetch_recent_page_posts(page_id: str, token: str) -> list[dict]:
     return result
 
 def build_summary(a: dict) -> str:
-    text = (
-        f"At about {a['age_hours']:.1f} hours, Facebook returned "
-        f"{a['visible_interactions']} visible interactions: "
-        f"{a['reactions']} reactions, {a['comments']} comments, and {a['shares']} shares."
-    )
+    if a.get("metrics_limited"):
+        text = (
+            f"At about {a['age_hours']:.1f} hours, Facebook returned "
+            f"{a['shares']} shares. Reaction and comment counts are unavailable "
+            "for the current app permissions, so this is a limited engagement snapshot."
+        )
+    else:
+        text = (
+            f"At about {a['age_hours']:.1f} hours, Facebook returned "
+            f"{a['visible_interactions']} visible interactions: "
+            f"{a['reactions']} reactions, {a['comments']} comments, and {a['shares']} shares."
+        )
     if a.get("baseline") is not None and a.get("delta_percent") is not None:
         direction = "above" if a["delta_percent"] > 0 else "below" if a["delta_percent"] < 0 else "at"
         text += (
