@@ -4,6 +4,8 @@ on:
   push:
     branches:
       - main
+    paths:
+      - ".github/workflows/post.yml"
   workflow_dispatch:
     inputs:
       slot:
@@ -54,6 +56,11 @@ jobs:
         run: |
           if [ "$EVENT_NAME" = "workflow_dispatch" ]; then
             echo "slot=$INPUT_SLOT" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          if [ "$EVENT_NAME" = "push" ]; then
+            echo "slot=1" >> "$GITHUB_OUTPUT"
             exit 0
           fi
 
