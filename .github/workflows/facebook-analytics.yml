@@ -1,6 +1,11 @@
 name: Facebook 12-Hour Analytics
 
 on:
+  push:
+    branches:
+      - main
+    paths:
+      - ".github/workflows/facebook-analytics.yml"
   workflow_dispatch:
   schedule:
     - cron: "45 * * * *"
