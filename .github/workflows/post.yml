@@ -1,6 +1,9 @@
 name: Two Takes EFootball
 
 on:
+  push:
+    branches:
+      - main
   workflow_dispatch:
     inputs:
       slot:
