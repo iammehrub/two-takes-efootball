@@ -19,9 +19,9 @@ jobs:
     timeout-minutes: 10
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
       - name: Set up Python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v6
         with:
           python-version: "3.12"
           cache: "pip"
@@ -44,4 +44,12 @@ jobs:
             exit 0
           fi
           git commit -m "Update Facebook analytics state"
-          git push
+          for attempt in 1 2 3; do
+            if git push; then
+              exit 0
+            fi
+            echo "Push attempt $attempt failed; rebasing onto latest main..."
+            git pull --rebase origin main
+          done
+          echo "Analytics state push could not be completed after 3 attempts; the analytics result itself remains valid."
+          exit 0
