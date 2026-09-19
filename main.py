@@ -646,12 +646,36 @@ URL:
 
 
 def resolve_page_access_token(token: str) -> str:
-    """Resolve a Page Access Token from the supplied Facebook token."""
+    """Accept either a Page token directly or a User token that can resolve to the Page."""
     global FACEBOOK_PAGE_ID
 
     if not token:
         fail("Missing FACEBOOK_PAGE_ACCESS_TOKEN.")
 
+    # Preferred path: the repository secret is already a Page Access Token.
+    # This avoids a dependency on /me/accounts and lets long-lived Page tokens
+    # be used directly.
+    page_check = requests.get(
+        f"https://graph.facebook.com/{FACEBOOK_PAGE_ID}",
+        params={
+            "fields": "id,name",
+            "access_token": token,
+        },
+        headers={"User-Agent": USER_AGENT},
+        timeout=(10, 30),
+    )
+    if page_check.ok:
+        data = page_check.json()
+        page_id = str(data.get("id", ""))
+        if page_id == str(FACEBOOK_PAGE_ID):
+            print(
+                f"Using supplied Page Access Token for "
+                f"{data.get('name', 'unknown')} ({page_id})."
+            )
+            return token
+
+    # Backward-compatible path: accept a User Access Token and derive the
+    # configured Page token from /me/accounts.
     response = requests.get(
         "https://graph.facebook.com/me/accounts",
         params={
@@ -664,8 +688,9 @@ def resolve_page_access_token(token: str) -> str:
 
     if not response.ok:
         fail(
-            "Facebook token cannot list Pages. "
-            f"HTTP {response.status_code}: {response.text[:700]}"
+            "Facebook token is neither a usable Page token nor a User token "
+            f"that can list Pages. HTTP {response.status_code}: "
+            f"{response.text[:700]}"
         )
 
     pages = response.json().get("data", [])
@@ -673,16 +698,16 @@ def resolve_page_access_token(token: str) -> str:
     if not pages:
         fail(
             "This Facebook token has access to no Pages. "
-            "Use a token from the Facebook account that manages the Page."
+            "Use a long-lived token from the Facebook account that manages "
+            "the Page, then derive the Page Access Token from /me/accounts."
         )
 
     for page in pages:
         page_id = str(page.get("id", ""))
-
         if page_id != str(FACEBOOK_PAGE_ID):
             continue
 
-        page_token = (page.get("access_token") or "").strip()
+        page_token = str(page.get("access_token", "")).strip()
         if not page_token:
             fail(
                 f"Meta found the Page {page.get('name', 'unknown')} "
@@ -690,42 +715,31 @@ def resolve_page_access_token(token: str) -> str:
             )
 
         tasks = page.get("tasks") or []
-
         print(
-            f"Found configured Page: {page.get('name', 'unknown')} "
-            f"({page_id})."
+            f"Resolved Page: {page.get('name', 'unknown')} ({page_id})."
         )
         print(
             "Page tasks: "
             + (", ".join(tasks) if tasks else "not returned")
         )
-
-        return page_token
-
-    if len(pages) == 1:
-        page = pages[0]
-        page_id = str(page.get("id", ""))
-        page_token = (page.get("access_token") or "").strip()
-        page_name = page.get("name", "unknown")
-
-        if not page_token:
-            fail(
-                f"Meta found {page_name} ({page_id}) but returned no "
-                "Page Access Token."
-            )
-
-        print(
-            f"Configured Page ID did not match. Using the only Page visible "
-            f"to this token: {page_name} ({page_id})."
-        )
-
-        FACEBOOK_PAGE_ID = page_id
         return page_token
 
     visible = [
         f"{page.get('name', 'unknown')} ({page.get('id', 'unknown')})"
         for page in pages
     ]
+
+    if len(pages) == 1:
+        page = pages[0]
+        page_id = str(page.get("id", ""))
+        page_token = str(page.get("access_token", "")).strip()
+        if page_token:
+            print(
+                f"Configured Page ID did not match. Using the only Page visible "
+                f"to this token: {page.get('name', 'unknown')} ({page_id})."
+            )
+            FACEBOOK_PAGE_ID = page_id
+            return page_token
 
     fail(
         "FACEBOOK_PAGE_ID does not match a Page visible to the token. "
