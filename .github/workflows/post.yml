@@ -1,6 +1,9 @@
 name: Two Takes EFootball
 
 on:
+  push:
+    branches:
+      - automation-live-test-fb
   workflow_dispatch:
     inputs:
       slot:
