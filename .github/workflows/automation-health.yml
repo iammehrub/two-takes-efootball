@@ -1,0 +1,68 @@
+name: Two Takes EFootball — Automation Health
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: '22 */6 * * *'
+      timezone: "Asia/Dhaka"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: two-takes-efootball-health
+  cancel-in-progress: true
+
+jobs:
+  health:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Validate automation
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          import json
+          import pathlib
+          import py_compile
+
+          root = pathlib.Path(".")
+          required = [
+              ".github/workflows/efootball-post.yml",
+              ".github/workflows/efootball-analytics.yml",
+              ".github/workflows/efootball-failure-alert.yml",
+              "main.py",
+              "facebook_analytics.py",
+          ]
+          missing = [p for p in required if not (root / p).exists()]
+          if missing:
+              raise SystemExit("Missing critical automation files: " + ", ".join(missing))
+
+          py_files = list(root.rglob("*.py"))
+          failures = []
+          for path in py_files:
+              if ".git" in path.parts:
+                  continue
+              try:
+                  py_compile.compile(str(path), doraise=True)
+              except Exception as exc:
+                  failures.append(f"{path}: {exc}")
+          if failures:
+              raise SystemExit("Python compile failures:\n" + "\n".join(failures))
+
+          bad_json = []
+          data = root / "data"
+          if data.exists():
+              for path in data.rglob("*.json"):
+                  try:
+                      json.loads(path.read_text(encoding="utf-8"))
+                  except Exception as exc:
+                      bad_json.append(f"{path}: {exc}")
+          if bad_json:
+              raise SystemExit("Invalid JSON state files:\n" + "\n".join(bad_json))
+
+          print(f"Healthy: checked {len(py_files)} Python files and repository JSON state.")
+          PY
