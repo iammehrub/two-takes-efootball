@@ -1,0 +1,54 @@
+name: Two Takes EFootball — Failure Alerts
+
+on:
+  workflow_run:
+    workflows:
+      - "Two Takes EFootball — Post"
+      - "Two Takes EFootball — 12h Analytics"
+    types:
+      - completed
+
+permissions:
+  actions: read
+
+jobs:
+  alert:
+    if: ${{ github.event.workflow_run.conclusion == 'failure' }}
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Send Discord failure alert
+        env:
+          DISCORD_ALERTS_WEBHOOK: ${{ secrets.DISCORD_ALERTS_WEBHOOK }}
+          WORKFLOW_NAME: ${{ github.event.workflow_run.name }}
+          RUN_URL: ${{ github.event.workflow_run.html_url }}
+          RUN_ID: ${{ github.event.workflow_run.id }}
+        run: |
+          set -euo pipefail
+
+          if [[ -z "${DISCORD_ALERTS_WEBHOOK:-}" ]]; then
+            echo "DISCORD_ALERTS_WEBHOOK is not configured; nothing to send."
+            exit 0
+          fi
+
+          payload=$(python - <<'PY'
+          import json
+          import os
+
+          print(json.dumps({
+              "username": "Two Takes Automation",
+              "content": (
+                  "🚨 **GitHub workflow failed**\n"
+                  f"Workflow: {os.environ.get('WORKFLOW_NAME', 'Unknown')}\n"
+                  f"Run: {os.environ.get('RUN_ID', 'Unknown')}\n"
+                  f"Details: {os.environ.get('RUN_URL', '')}"
+              ),
+              "allowed_mentions": {"parse": []},
+          }))
+          PY
+          )
+
+          curl --fail-with-body --retry 2 --max-time 20 \
+            -H "Content-Type: application/json" \
+            -d "$payload" \
+            "$DISCORD_ALERTS_WEBHOOK"
