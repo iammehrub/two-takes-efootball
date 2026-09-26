@@ -5,6 +5,7 @@ on:
     workflows:
       - "Two Takes EFootball — Post"
       - "Two Takes EFootball — 12h Analytics"
+      - "Two Takes EFootball — Automation Health"
     types:
       - completed
 
