@@ -1,46 +1,48 @@
 # Two Takes EFootball
 
-Automated Facebook Page posting for Two Takes EFootball.
+Automated Facebook Page publishing and analytics for Two Takes EFootball.
 
-## What it does
+## Automation
 
-- Publishes up to 4 posts per day.
-- Uses Google News RSS to find fresh eFootball stories.
-- Uses slot-specific topic filters so news, updates/events, player-card/rating content, and tips/community content do not get mixed together.
-- Prefers official KONAMI material and established eFootball coverage.
-- Uses OpenRouter for English/Banglish captions with a deterministic source-based fallback.
+- Publishes 4 scheduled posts per day at 10:15, 14:15, 18:15, and 22:15 Bangladesh time.
+- Slot 1 = eFootball news.
+- Slot 2 = updates and events.
+- Slot 3 = player ratings / player-card news.
+- Slot 4 = tips and community content.
+- Uses Google News RSS to find fresh stories and prefers official KONAMI material.
+- Uses OpenRouter for captions with source-grounded validation and a deterministic fallback.
 - Generates a branded 1200×675 image locally with Pillow.
-- Publishes the image + caption to the Facebook Page through the Graph API.
-- Keeps posting history in `data/state.json` to reduce duplicate stories.
-- Refuses to publish when no suitable fresh story is found.
+- Records published posts in `data/state.json` to reduce duplicates.
+- Runs Facebook 12-hour analytics every hour and only processes posts that are at least 12 hours old.
+- Sends Discord alerts for published posts, analytics, and workflow failures.
 
-## GitHub Secrets
+## Required GitHub Secrets
 
-Create these repository secrets under Settings → Secrets and variables → Actions:
+Create these under **Settings → Secrets and variables → Actions**:
 
-- FACEBOOK_PAGE_ACCESS_TOKEN
-- FACEBOOK_PAGE_ID
-- OPENROUTER_API_KEY
-- DISCORD_FACEBOOK_WEBHOOK
-- DISCORD_FACEBOOK_ANALYTICS_WEBHOOK
-- DISCORD_ALERTS_WEBHOOK
+- `FACEBOOK_PAGE_ACCESS_TOKEN`
+- `FACEBOOK_PAGE_ID`
+- `OPENROUTER_API_KEY`
+- `DISCORD_FACEBOOK_WEBHOOK`
+- `DISCORD_FACEBOOK_ANALYTICS_WEBHOOK`
+- `DISCORD_ALERTS_WEBHOOK`
 
 Optional repository variable:
 
-- `OPENROUTER_MODEL` — defaults to `openai/gpt-oss-20b:free`
+- `OPENROUTER_MODEL` — defaults to `openrouter/free`.
 
-## Schedule
+## Manual testing
 
-The workflow uses Bangladesh time (Asia/Dhaka) and targets 10:15, 14:15, 18:15, and 22:15.
+Open **Actions → Two Takes EFootball — Post → Run workflow** and choose slot 1–4.
 
-GitHub scheduled workflows can be delayed under load, so the exact posting minute is not guaranteed.
+Open **Actions → Two Takes EFootball — 12h Analytics → Run workflow** to test analytics.
 
-## Manual test
+## Failure handling
 
-Open Actions → Two Takes EFootball → Run workflow and select a post slot.
+Facebook posting and analytics state are committed back to the repository with retry/rebase logic. A separate failure-alert workflow sends a Discord alert when either automated workflow fails.
 
-## Discord split
+## Repository split
 
-This repository is responsible for Facebook content and Facebook analytics.
+This repository handles Facebook/eFootball automation and Facebook analytics.
 
-The YouTube upload notifications and Bangladesh news feed are intentionally kept in the separate `iammehrub/the-two-takes` repository. This prevents the Facebook workflow from requiring YouTube channel IDs and caused the previous YouTube-variable alert spam to stop.
+The YouTube podcast automation and Bangladesh news feed stay in `iammehrub/the-two-takes`.
